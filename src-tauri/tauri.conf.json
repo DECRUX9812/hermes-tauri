@@ -24,6 +24,12 @@
   "bundle": {
     "active": true,
     "targets": ["deb", "appimage"],
+    "publisher": "DECRUX9812",
+    "copyright": "Copyright (c) 2026 DECRUX9812",
+    "shortDescription": "A light Tauri shell for the Hermes desktop UI",
+    "longDescription": "An optional second desktop shell for Hermes. It wraps the same Hermes desktop web UI and runs the Python plugin backend, so Python plugins keep working unchanged.",
+    "category": "Productivity",
+    "homepage": "https://github.com/DECRUX9812/hermes-tauri",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
