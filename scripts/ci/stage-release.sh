@@ -43,6 +43,20 @@ declare -A PLATFORM_PREFERRED=(
   ["windows-x86_64"]="setup.exe"
 )
 
+# Valid deliverable extensions (without leading dot, except double extensions handled specially)
+# We match files at exactly depth 2: bundle-type/deliverable
+is_deliverable() {
+  local basename_file="$1"
+  case "$basename_file" in
+    *.deb|*.rpm|*.AppImage|*.AppImage.sig|*.dmg|*.app.tar.gz|*.app.tar.gz.sig|*-setup.exe|*-setup.exe.sig|*.msi|*.msi.sig)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 # Find all bundle directories
 shopt -s nullglob
 BUNDLE_DIRS=("$ARTIFACTS_DIR"/bundle-*)
@@ -53,12 +67,13 @@ if [ ${#BUNDLE_DIRS[@]} -eq 0 ]; then
   exit 1
 fi
 
-# First pass: collect all files with their platform, and determine updater bundles per platform
+# Single pass: collect all deliverable files at depth 2, track per-platform info
 declare -a ALL_FILES=()
 declare -a ALL_PLATFORMS=()
 declare -A PLATFORM_BUNDLE=()      # Original bundle basename (for matching)
 declare -A PLATFORM_SIG=()
 declare -A PLATFORM_NEW_BUNDLE=()  # New deterministic name (for macOS updater bundle)
+ignored_count=0
 
 for bundle_dir in "${BUNDLE_DIRS[@]}"; do
   dir_name=$(basename "$bundle_dir")
@@ -69,47 +84,48 @@ for bundle_dir in "${BUNDLE_DIRS[@]}"; do
     continue
   fi
 
-  # Find all files in this bundle directory (recursively)
-  while IFS= read -r -d '' file; do
-    [ -f "$file" ] || continue
-    ALL_FILES+=("$file")
-    ALL_PLATFORMS+=("$platform")
-  done < <(find "$bundle_dir" -type f -print0)
-
-  # Determine the preferred updater bundle for this platform
-  preferred_pattern="${PLATFORM_PREFERRED[$platform]}"
+  # Find deliverable files at exactly depth 2 (bundle-type/file)
   while IFS= read -r -d '' file; do
     [ -f "$file" ] || continue
     basename_file=$(basename "$file")
-    [[ "$basename_file" == *.sig ]] && continue
-    case "$platform" in
-      linux-x86_64|linux-aarch64)
-        [[ "$basename_file" == *.AppImage ]] || continue
-        ;;
-      darwin-aarch64|darwin-x86_64)
-        [[ "$basename_file" == *.app.tar.gz ]] || continue
-        ;;
-      windows-x86_64)
-        [[ "$basename_file" == *setup.exe ]] || continue
-        ;;
-    esac
-    sig_file="${file}.sig"
-    if [ -f "$sig_file" ]; then
-      orig_bundle=$(basename "$file")
-      PLATFORM_BUNDLE[$platform]=$orig_bundle
-      PLATFORM_SIG[$platform]=$(cat "$sig_file" | tr -d '\n\r[:space:]')
-      # Pre-compute the new deterministic name for macOS
-      if [[ "$platform" == darwin-* ]]; then
-        arch="${platform#darwin-}"
-        PLATFORM_NEW_BUNDLE[$platform]="Hermes-Tauri_${VERSION}_${arch}.app.tar.gz"
-      fi
-      echo "Selected updater bundle for $platform: $orig_bundle"
+
+    if ! is_deliverable "$basename_file"; then
+      ignored_count=$((ignored_count + 1))
+      continue
     fi
-    break
-  done < <(find "$bundle_dir" -type f -print0)
+
+    ALL_FILES+=("$file")
+    ALL_PLATFORMS+=("$platform")
+
+    # If this is a preferred updater bundle with a .sig, record it
+    preferred_pattern="${PLATFORM_PREFERRED[$platform]}"
+    if [[ "$basename_file" == *.sig ]]; then
+      # Check if the corresponding main file exists and matches preferred pattern
+      main_file="${basename_file%.sig}"
+      if [[ "$main_file" == *"$preferred_pattern"* ]]; then
+        sig_file="$file"
+        main_file_path="${file%.sig}"
+        if [ -f "$main_file_path" ]; then
+          orig_bundle=$(basename "$main_file_path")
+          PLATFORM_BUNDLE[$platform]=$orig_bundle
+          PLATFORM_SIG[$platform]=$(cat "$sig_file" | tr -d '\n\r[:space:]')
+          # Pre-compute the new deterministic name for macOS
+          if [[ "$platform" == darwin-* ]]; then
+            arch="${platform#darwin-}"
+            PLATFORM_NEW_BUNDLE[$platform]="Hermes-Tauri_${VERSION}_${arch}.app.tar.gz"
+          fi
+          echo "Selected updater bundle for $platform: $orig_bundle"
+        fi
+      fi
+    fi
+  done < <(find "$bundle_dir" -mindepth 2 -maxdepth 2 -type f -print0)
 done
 
-# Compute deterministic staged names for all files, and track staged name per platform
+if [ $ignored_count -gt 0 ]; then
+  echo "Ignored $ignored_count non-deliverable files (extracted package internals, etc.)"
+fi
+
+# Compute deterministic staged names for all files
 declare -a STAGE_FILES=()
 declare -a STAGE_DESTS=()
 declare -A PLATFORM_STAGED_BUNDLE=()
@@ -119,7 +135,7 @@ for i in "${!ALL_FILES[@]}"; do
   platform="${ALL_PLATFORMS[$i]}"
   basename_file=$(basename "$file")
   staged_name="${basename_file// /-}"
-  
+
   # Special handling: macOS updater bundle and its .sig get deterministic names per platform
   if [[ "$platform" == darwin-* ]]; then
     orig_bundle="${PLATFORM_BUNDLE[$platform]:-}"
@@ -143,7 +159,7 @@ for i in "${!ALL_FILES[@]}"; do
       PLATFORM_STAGED_BUNDLE[$platform]="$staged_name"
     fi
   fi
-  
+
   STAGE_FILES+=("$file")
   STAGE_DESTS+=("dist-release/$staged_name")
 done
@@ -197,14 +213,14 @@ jq -n \
 for platform in "${!PLATFORM_SIG[@]}"; do
   signature="${PLATFORM_SIG[$platform]}"
   [ -n "$signature" ] || continue
-  
+
   # Use the staged bundle name for this platform
   bundle_basename="${PLATFORM_STAGED_BUNDLE[$platform]}"
   [ -n "$bundle_basename" ] || continue
-  
+
   # URL-encode the basename using jq's @uri
   asset_url="${BASE_URL}/$(printf '%s' "$bundle_basename" | jq -sRr @uri)"
-  
+
   jq \
     --arg platform "$platform" \
     --arg signature "$signature" \
