@@ -4,17 +4,28 @@ set -Eeuo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 PIN="$(cd -- "$REPO_ROOT/../_hermes-pin" && pwd)"
-STATE_DIR=/tmp/hermes-tauri-test
-SERVER_LOG="$STATE_DIR/logs/server.log"
-PID_FILE="$STATE_DIR/pid"
-RUN_ID_FILE="$STATE_DIR/run-id"
-PORT_FILE="$STATE_DIR/port"
-LAUNCH_URL_FILE="$STATE_DIR/launch-url"
+DEFAULT_STATE_DIR=/tmp/hermes-tauri-test
+STATE_DIR="${HERMES_TAURI_TEST_DIR:-$DEFAULT_STATE_DIR}"
 
 fail() {
   printf 'test-hermes: %s\n' "$*" >&2
   exit 1
 }
+
+resolve_state_dir() {
+  STATE_DIR="$(realpath -m -- "$STATE_DIR")" || fail 'could not resolve the test state directory'
+  case "$STATE_DIR" in
+    "$DEFAULT_STATE_DIR"|"$DEFAULT_STATE_DIR"-*|"$DEFAULT_STATE_DIR"/*) ;;
+    *) fail "state directory must be $DEFAULT_STATE_DIR or a sibling beginning with ${DEFAULT_STATE_DIR##*/}-" ;;
+  esac
+  SERVER_LOG="$STATE_DIR/logs/server.log"
+  PID_FILE="$STATE_DIR/pid"
+  RUN_ID_FILE="$STATE_DIR/run-id"
+  PORT_FILE="$STATE_DIR/port"
+  LAUNCH_URL_FILE="$STATE_DIR/launch-url"
+}
+
+resolve_state_dir
 
 require_pin() {
   [[ -f "$PIN/hermes" ]] || fail 'pinned Hermes checkout is missing'
@@ -120,6 +131,11 @@ write_test_config() {
   cat > "$STATE_DIR/hermes/config.yaml" <<'YAML'
 onboarding:
   run: false
+model:
+  provider: custom
+  base_url: http://127.0.0.1:18899/v1
+  default: test-model
+  api_key: no-key-required
 YAML
   chmod 600 "$STATE_DIR/hermes/config.yaml"
 }
@@ -321,6 +337,135 @@ show_status() {
   fi
 }
 
+verify_isolation() {
+  local pid
+  pid="$(read_pid)" || fail 'test server is not running'
+  owns_server_group "$pid" || fail 'pid does not identify this test server process group'
+
+  python3 - "$pid" "$STATE_DIR/home" "$STATE_DIR/hermes" "$STATE_DIR/runtime" <<'PY'
+import os
+import sys
+from pathlib import Path
+
+target_pgid = int(sys.argv[1])
+expected = {
+    "HOME": sys.argv[2],
+    "HERMES_HOME": sys.argv[3],
+    "HERMES_RUNTIME_DIR": sys.argv[4],
+}
+real_hermes_home = (Path.home() / ".hermes").resolve(strict=False)
+environment_keys = tuple(expected)
+processes = []
+failures = []
+
+for entry in os.listdir("/proc"):
+    if not entry.isdigit():
+        continue
+    pid = int(entry)
+    try:
+        if os.getpgid(pid) == target_pgid:
+            processes.append(pid)
+    except (ProcessLookupError, PermissionError):
+        continue
+
+if not processes:
+    print("ISOLATION_FAILURE no_processes_in_server_group")
+    raise SystemExit(1)
+
+for pid in sorted(processes):
+    try:
+        raw_environment = Path(f"/proc/{pid}/environ").read_bytes()
+    except FileNotFoundError:
+        continue
+    except PermissionError:
+        values = {key: "<unreadable>" for key in environment_keys}
+        print(f"pid={pid} " + " ".join(f"{key}={values[key]}" for key in environment_keys))
+        failures.append(f"pid={pid} environment_unreadable")
+        continue
+
+    environment = {}
+    for item in raw_environment.split(b"\0"):
+        if b"=" not in item:
+            continue
+        key, value = item.split(b"=", 1)
+        decoded_key = key.decode("ascii", errors="ignore")
+        if decoded_key in expected:
+            environment[decoded_key] = value.decode("utf-8", errors="replace")
+
+    print(
+        f"pid={pid} "
+        + " ".join(f"{key}={environment.get(key, '<unset>')}" for key in environment_keys)
+    )
+    for key, expected_value in expected.items():
+        if environment.get(key) != expected_value:
+            failures.append(f"pid={pid} {key}_not_isolated")
+
+    fd_dir = Path(f"/proc/{pid}/fd")
+    found_fds = 0
+    try:
+        fd_names = os.listdir(fd_dir)
+    except FileNotFoundError:
+        continue
+    except PermissionError:
+        failures.append(f"pid={pid} fd_directory_unreadable")
+        continue
+
+    for fd in sorted(fd_names, key=lambda value: int(value) if value.isdigit() else -1):
+        if not fd.isdigit():
+            continue
+        try:
+            target = os.readlink(fd_dir / fd)
+        except (FileNotFoundError, PermissionError):
+            continue
+        if target.endswith(" (deleted)"):
+            target = target[:-10]
+        try:
+            resolved_target = Path(target).resolve(strict=False)
+            relative_target = resolved_target.relative_to(real_hermes_home)
+        except (OSError, ValueError):
+            continue
+
+        try:
+            fdinfo = Path(f"/proc/{pid}/fdinfo/{fd}").read_text(encoding="ascii")
+        except (FileNotFoundError, PermissionError):
+            failures.append(f"pid={pid} fd={fd} fdinfo_unreadable")
+            continue
+        flags_line = next((line for line in fdinfo.splitlines() if line.startswith("flags:")), None)
+        if flags_line is None:
+            failures.append(f"pid={pid} fd={fd} flags_missing")
+            continue
+        try:
+            flags = int(flags_line.split()[1], 8)
+        except (IndexError, ValueError):
+            failures.append(f"pid={pid} fd={fd} flags_invalid")
+            continue
+
+        if getattr(os, "O_PATH", 0) and flags & os.O_PATH:
+            mode = "path-only"
+        else:
+            access_mode = flags & os.O_ACCMODE
+            mode = {
+                os.O_RDONLY: "read-only",
+                os.O_WRONLY: "write-only",
+                os.O_RDWR: "read-write",
+            }.get(access_mode, "unknown")
+        found_fds += 1
+        print(f"pid={pid} fd={fd} mode={mode} path={relative_target}")
+        if mode in {"write-only", "read-write", "unknown"}:
+            failures.append(f"pid={pid} fd={fd} writable_or_unknown_mode")
+
+    if not found_fds:
+        print(f"pid={pid} fds-under-real-hermes=none")
+
+if failures:
+    for failure in failures:
+        print(f"ISOLATION_FAILURE {failure}")
+    raise SystemExit(1)
+
+print("isolation=pass")
+PY
+}
+
 show_command() {
   local requested_port="${1:-}" port python run_id
   require_pin
@@ -353,7 +498,10 @@ seed_demo() {
 }
 
 reset_state() {
-  [[ "$STATE_DIR" == /tmp/hermes-tauri-test ]] || fail 'refusing to reset an unexpected path'
+  case "$STATE_DIR" in
+    "$DEFAULT_STATE_DIR"|"$DEFAULT_STATE_DIR"-*|"$DEFAULT_STATE_DIR"/*) ;;
+    *) fail 'refusing to reset an unexpected path' ;;
+  esac
   if [[ -e "$PID_FILE" ]]; then
     stop_server >/dev/null
   fi
@@ -375,6 +523,10 @@ case "${1:-}" in
     (($# == 1)) || fail 'usage: test-hermes.sh status'
     show_status
     ;;
+  verify-isolation)
+    (($# == 1)) || fail 'usage: test-hermes.sh verify-isolation'
+    verify_isolation
+    ;;
   url)
     (($# == 1)) || fail 'usage: test-hermes.sh url'
     [[ -r "$LAUNCH_URL_FILE" ]] || fail 'launch link is unavailable; start the test Hermes first'
@@ -394,6 +546,6 @@ case "${1:-}" in
     reset_state
     ;;
   *)
-    fail 'usage: test-hermes.sh {start [port]|stop|status|url|cmd [port]|seed|reset}'
+    fail 'usage: test-hermes.sh {start [port]|stop|status|verify-isolation|url|cmd [port]|seed|reset}'
     ;;
 esac
