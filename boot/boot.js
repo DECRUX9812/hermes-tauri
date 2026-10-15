@@ -16,7 +16,9 @@
       return;
     }
     if (state.phase === 'unreachable') {
-      headline.textContent = `Hermes not reachable at ${state.origin || 'the configured URL'}`;
+      headline.textContent = state.origin
+        ? `Hermes not reachable at ${state.origin}`
+        : 'Hermes not reachable';
       detail.textContent = 'Check that the server is running, then try again.';
       if (state.error) {
         error.textContent = state.error;
@@ -32,33 +34,31 @@
       : 'Checking the configured Hermes server.';
   };
 
-  retry.addEventListener('click', async () => {
-    retry.disabled = true;
-    try {
-      await tauri.core.invoke('boot_retry');
-    } catch (failure) {
-      render({
-        error: failure instanceof Error ? failure.message : String(failure),
-        origin: null,
-        phase: 'unreachable'
-      });
-    } finally {
-      retry.disabled = false;
-    }
-  });
-
   const showFailure = failure => render({
     error: failure instanceof Error ? failure.message : String(failure),
     origin: null,
     phase: 'unreachable'
   });
 
+  const syncState = () => tauri.core.invoke('boot_state').then(render);
+
+  retry.addEventListener('click', async () => {
+    retry.disabled = true;
+    try {
+      await tauri.core.invoke('boot_retry');
+      await syncState();
+    } catch (failure) {
+      showFailure(failure);
+    } finally {
+      retry.disabled = false;
+    }
+  });
+
   if (!tauri?.core?.invoke) {
     showFailure(new Error('Tauri boot commands are unavailable.'));
     return;
   }
-  Promise.resolve(tauri.event.listen('boot-state', event => render(event.payload)))
-    .then(() => tauri.core.invoke('boot_state'))
-    .then(render)
-    .catch(showFailure);
+  // If the event permission is denied, the state is still read through boot_state.
+  tauri.event.listen('boot-state', event => render(event.payload)).catch(() => undefined);
+  syncState().catch(showFailure);
 })();

@@ -4,5 +4,5 @@
   "description": "Allows the bundled boot page to read connection state and retry.",
   "local": true,
   "windows": ["main"],
-  "permissions": ["allow-boot-state", "allow-boot-retry"]
+  "permissions": ["allow-boot-state", "allow-boot-retry", "core:event:allow-listen"]
 }

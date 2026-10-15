@@ -6,7 +6,6 @@ mod native;
 use tauri::{webview::WebviewWindowBuilder, Manager, WebviewUrl};
 
 fn main() {
-    eprintln!("=== MAIN ENTERED ===");
     #[cfg(target_os = "linux")]
     if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
         // WebKitGTK's DMABUF renderer can produce a black window under Xvfb and NVIDIA.
@@ -32,7 +31,6 @@ fn main() {
             native::native_notify
         ])
         .setup(move |app| {
-            eprintln!("=== SETUP ENTERED ===");
             app.manage(manager.clone());
 
             let navigation_app = app.handle().clone();

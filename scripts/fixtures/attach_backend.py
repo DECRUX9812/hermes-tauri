@@ -31,7 +31,7 @@ PAGE = b"""<!doctype html>
   <main>
     <h1>Hermes Tauri attach fixture</h1>
     <p>This fixture reproduces the browser bridge assignment path.</p>
-    <div id="result">Installing browser bridge…</div>
+    <div id="result">Installing browser bridge...</div>
   </main>
   <script>
     const fixtureBrowserNotify = async () => false;
@@ -48,8 +48,21 @@ PAGE = b"""<!doctype html>
     document.querySelector('#result').innerHTML = [
       `<p>typeof window.hermesDesktop.openExternal: <code>${typeof bridge.openExternal}</code></p>`,
       `<p>Native host: <code>${document.documentElement.dataset.hermesNativeHost || 'missing'}</code></p>`,
-      `<p>Notify overlay native: <code>${bridge.notify !== fixtureBrowserNotify ? 'yes' : 'no'}</code></p>`
+      `<p>Notify overlay native: <code>${bridge.notify !== fixtureBrowserNotify ? 'yes' : 'no'}</code></p>`,
+      `<p>srcdoc iframe loaded: <code id="srcdoc-state">pending</code></p>`,
+      `<p>same-origin iframe loaded: <code id="same-origin-state">pending</code></p>`
     ].join('');
+    const probeFrame = (stateId, configure) => {
+      const frame = document.createElement('iframe');
+      frame.hidden = true;
+      configure(frame);
+      frame.addEventListener('load', () => {
+        document.querySelector(`#${stateId}`).textContent = 'yes';
+      });
+      document.body.append(frame);
+    };
+    probeFrame('srcdoc-state', frame => { frame.srcdoc = '<p>frame</p>'; });
+    probeFrame('same-origin-state', frame => { frame.src = '/api/health'; });
   </script>
 </body>
 </html>

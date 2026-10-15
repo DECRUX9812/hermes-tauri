@@ -2,7 +2,8 @@ use tauri::{webview::NewWindowResponse, AppHandle, Url, Wry};
 use tauri_plugin_opener::OpenerExt;
 
 pub fn handle_navigation(app: &AppHandle, url: &Url, backend_origin: Option<&str>) -> bool {
-    if is_allowed(url, backend_origin) {
+    // srcdoc and about:blank iframes are inert and must load inside allowed pages.
+    if is_allowed(url, backend_origin) || url.scheme() == "about" {
         return true;
     }
 
