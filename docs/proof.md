@@ -1,15 +1,20 @@
-# Tauri Shell Proof Screenshots (T6a Early Proof)
+# Tauri Shell Proof Screenshots (early proof, T1 build)
 
-Screenshots captured under Xvfb (1440x900x24) with a private D-Bus session running the frozen T1 binary (`$HOME/.cache/hermes-tauri/bin-t1/hermes-tauri`, sha256: `eb7bbd113933...`) in attach mode against an isolated test Hermes daemon on port 18825 (`/tmp/hermes-tauri-test-t6a`).
+Screenshots captured under Xvfb (1440x900x24) with a private D-Bus session running the frozen T1 binary (sha256 `eb7bbd113933...`) in
+attach mode against an isolated test Hermes on a port in 18800–18899. The PNGs live in `~/Videos/tauri-shots/` and are not committed.
+These are the early shots; the final T5 build replaces them (see the later sections when present).
 
-All shots verified: 1440x900 resolution, non-blank, zero personal data, zero host paths, zero credentials.
+## Image list
 
-## Image List
-
-- `01-boot.png`: Unreachable boot screen ("Hermes is not reachable") displaying connection retry attempts when launched against port 18825 before the daemon was started.
-- `02-sessions.png`: Home view (`#/`) showing the Sessions sidebar populated with all six seeded demo sessions and recent activity cards.
-- `03-plugin-rail.png`: Activity rail visible on the far left with the Kanban board icon active, displaying the seeded Kanban plugin board (`#/kanban`).
-- `04-team.png`: Team view (`#/team`) showing the Demo Product Team organizational chart with Research Bot (Lead), Writer Bot, and Reviewer Bot.
-- `05-group-chat.png`: Demo Product Room in the group chat workspace with three bot participants and a submitted neutral user message ("Demo: please summarize the launch checklist") visible in the transcript (seeded messages do not hydrate in fresh profiles due to a known UI projection bug in `GroupChatWorkspace.tsx`, so the room was opened and messaged via real UI clicks and keyboard input; no mock backend model response expected).
-- `06-reload-before.png`: Team view (`#/team`) with the Demo Product Team loaded prior to reload verification.
-- `07-reload-after.png`: Team view (`#/team`) following relaunch with the identical launch URL; neither F5 nor Ctrl+R triggers a reload in WebKitGTK without custom accelerators (to be added in T5/T6), confirming session token persistence, state preservation, and zero re-authentication prompts or errors upon relaunch.
+- `01-boot.png`: the boot page while connecting ("Connecting to Hermes…", checking the test port) before the test Hermes was up. The
+  1280x820 window sits in the top-left of the 1440x900 root; the black border is the bare Xvfb root.
+- `02-sessions.png`: `#/` with the six seeded demo sessions in the sidebar and three of them as recent-task cards. The composer shows
+  the test Hermes working directory's git branch as a chip.
+- `03-plugin-rail.png`: the plugin rail on the far left with the Kanban plugin open (`#/kanban`, empty default board).
+- `04-team.png`: `#/team` with the Demo Product Team org chart (Research Bot as lead, Writer Bot, Reviewer Bot).
+- `05-group-chat.png`: a group chat opened through the UI, with two neutral typed messages and Research Bot working. The seeded "Demo
+  Product Room" is listed in the sidebar but its four seeded messages do not hydrate in a fresh profile (UI boot race, see
+  docs/test-hermes.md). The open room is a second room named "Demo Product" created during the run, not the seeded one.
+- `06-reload-before.png`: `#/team` before the reload attempt.
+- `07-reload-after.png`: `#/team` after RELAUNCHING the shell with the same launch link. F5 and Ctrl+R do nothing in the T1 build
+  (WebKitGTK has no default reload accelerator), so this shot does not prove an in-place reload.

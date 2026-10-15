@@ -129,6 +129,8 @@ scripts/measure.sh startup --label tauri-t1-attach \
 ## Caveats
 
 - Startup is first paint, not data loaded (see Method).
+- The Electron and Tauri columns were measured about three hours apart, and the Tauri runs overlapped heavy builds from other jobs
+  on the same machine. Treat the startup ratio as provisional until both shells are measured back to back.
 - RAM after the click covers the Messaging page for Electron (`68,100`), whereas for Tauri it navigates to the Team page `#/team` (`16,370`) via the activity rail.
 - Attach mode spawned no backend in any run, so the backend column is 0. The pattern is a guard, not a
   measurement of backend cost; the backend is the same for both shells.
