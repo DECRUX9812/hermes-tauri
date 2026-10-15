@@ -17,3 +17,8 @@ commands.allow = ["native_open_external"]
 identifier = "allow-native-notify"
 description = "Allows the Hermes web app to display a native notification."
 commands.allow = ["native_notify"]
+
+[[permission]]
+identifier = "allow-native-select-paths"
+description = "Allows the Hermes web app to open a native file and folder picker."
+commands.allow = ["native_select_paths"]

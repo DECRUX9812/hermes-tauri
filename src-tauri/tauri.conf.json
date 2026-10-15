@@ -14,6 +14,13 @@
       "capabilities": ["boot-local"]
     }
   },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["hermes-tauri"]
+      }
+    }
+  },
   "bundle": {
     "active": true,
     "targets": ["deb", "appimage"],

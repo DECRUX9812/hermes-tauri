@@ -1,6 +1,11 @@
 (() => {
-  const backendOrigin = __HERMES_BACKEND_ORIGIN__;
-  if (location.origin !== backendOrigin) return;
+  // Runs on every page the webview loads. In SPAWN mode the backend origin
+  // (port 0) is unknown when the window is built, so the adapter cannot be
+  // scoped by origin here. The real IPC boundary is the runtime capability,
+  // which is granted to the exact backend origin after connect resolves, and
+  // the navigation guard keeps every other origin out of this webview. The
+  // adapter therefore only overlays on http(s) pages, never on the boot page.
+  if (location.protocol !== 'http:' && location.protocol !== 'https:') return;
 
   const tauri = window.__TAURI__;
   if (!tauri?.core?.invoke) return;
@@ -33,6 +38,15 @@
       return false;
     }
   };
+  const nativeSelectPaths = async options => {
+    try {
+      return await tauri.core.invoke('native_select_paths', {
+        options: options && typeof options === 'object' ? options : {}
+      });
+    } catch {
+      return [];
+    }
+  };
 
   let installedBridge;
   Object.defineProperty(window, 'hermesDesktop', {
@@ -46,6 +60,7 @@
       if (bridge && typeof bridge === 'object') {
         bridge.openExternal = nativeOpenExternal;
         bridge.notify = nativeNotify;
+        bridge.selectPaths = nativeSelectPaths;
       }
       Object.defineProperty(window, 'hermesDesktop', {
         configurable: true,
