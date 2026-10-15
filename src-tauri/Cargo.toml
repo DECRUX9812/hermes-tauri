@@ -1,10 +1,15 @@
 [package]
 name = "hermes-tauri"
 version = "0.1.0"
-description = "Hermes desktop shell"
+description = "An optional Tauri v2 desktop shell for the Hermes desktop web UI"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

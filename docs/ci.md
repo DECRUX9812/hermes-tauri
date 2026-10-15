@@ -9,6 +9,7 @@ This document describes the GitHub Actions workflow for building the Hermes Taur
 ### Top-Level Configuration
 - **Workflow Name**: `Build`
 - **Permissions**: `contents: read` (scoped globally, elevated to `contents: write` only within the release job)
+- **Concurrency**: one run per ref (`${{ github.workflow }}-${{ github.ref }}`), superseding an in-flight run (`cancel-in-progress`) **only** for `pull_request` events, so a `push` to `master` or a tagged release build is never cancelled mid-flight
 - **Triggers**:
   - `push` to `master`
   - Tag creation matching `v*`

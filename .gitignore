@@ -1,4 +1,9 @@
 .oc/
+devloop/
+.hermes/
+.task/
+__pycache__/
+*.pyc
 target/
 node_modules/
 dist/

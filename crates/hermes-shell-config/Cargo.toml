@@ -1,9 +1,15 @@
 [package]
 name = "hermes-shell-config"
+description = "Resolves the Hermes backend source (flag, env, config.toml) and installs the bundled payload"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [dependencies]
 fs4 = "1"
