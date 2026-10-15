@@ -13,6 +13,11 @@ HERMES_TAURI_TEST_DIR=/tmp/hermes-tauri-test-t2b scripts/test-hermes.sh stop
 HERMES_TAURI_TEST_DIR=/tmp/hermes-tauri-test-t2b scripts/test-hermes.sh reset
 ```
 
+`HERMES_TAURI_PIN` sets the Hermes checkout to run. It must be an absolute path to a checkout that
+contains `hermes` and a built `apps/desktop/dist-webapp`. When it is unset, the script uses a
+`_hermes-pin` directory next to the repository root. If neither exists, `start` stops with an error
+that names the path it tried.
+
 The override controls the pid, launch link, logs, and all runtime directories. It must resolve to
 `/tmp/hermes-tauri-test`, a sibling whose name starts with `/tmp/hermes-tauri-test-`, or a child
 directory beneath `/tmp/hermes-tauri-test`. `reset` stops only the managed server and removes only
