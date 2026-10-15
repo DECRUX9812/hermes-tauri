@@ -86,9 +86,18 @@ fn create_preview_window(
             let backend_origin = navigation_app.state::<BootManager>().origin();
             handle_navigation(&navigation_app, url, backend_origin.as_deref())
         })
-        .on_new_window(move |url, features| {
+        .on_new_window(move |url, _features| {
             let backend_origin = new_window_app.state::<BootManager>().origin();
-            handle_new_window(&new_window_app, url, features, backend_origin.as_deref())
+            // Cross-origin new-window requests go to the browser. A preview
+            // window never opens further popups: popups opening popups is
+            // unbounded nesting with no user value (review F4).
+            match popup_decision(&url, backend_origin.as_deref()) {
+                PopupDecision::OpenExternal => {
+                    open_external(&new_window_app, &url);
+                    NewWindowResponse::Deny
+                }
+                PopupDecision::Preview | PopupDecision::Deny => NewWindowResponse::Deny,
+            }
         })
         .build()
         .map_err(|error| format!("could not build the preview window {label:?}: {error}"))

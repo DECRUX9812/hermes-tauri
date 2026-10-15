@@ -1,7 +1,23 @@
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, Url};
 use tauri_plugin_deep_link::DeepLinkExt;
 
 use crate::sidecar::{self, BootManager};
+
+/// Logs a rejected deep link without its query and fragment: the fragment can
+/// carry the session token, which must not reach stderr (review F3, L2).
+fn log_rejected(url: &str, reason: &str) {
+    let described = Url::parse(url)
+        .map(|parsed| {
+            format!(
+                "{}://{}{}",
+                parsed.scheme(),
+                parsed.host_str().unwrap_or_default(),
+                parsed.path()
+            )
+        })
+        .unwrap_or_else(|_| "a deep link".to_owned());
+    sidecar::log(&format!("Ignored {described}: {reason}"));
+}
 
 /// Navigates the main webview for a `hermes-tauri://open?path=…` link.
 /// Whitelisted routes map to their hash path; anything else is ignored and
@@ -9,9 +25,7 @@ use crate::sidecar::{self, BootManager};
 pub fn handle_url(app: &AppHandle, url: &str) -> bool {
     let Some(manager) = app.try_state::<BootManager>() else {
         // A launch can arrive while the first instance is still in setup.
-        sidecar::log(&format!(
-            "Ignored deep link {url:?}: the shell is still starting"
-        ));
+        log_rejected(url, "the shell is still starting");
         return false;
     };
     match hermes_shell_config::parse(url) {
@@ -20,7 +34,7 @@ pub fn handle_url(app: &AppHandle, url: &str) -> bool {
             true
         }
         Err(error) => {
-            sidecar::log(&format!("Ignored deep link {url:?}: {error}"));
+            log_rejected(url, &error.to_string());
             false
         }
     }

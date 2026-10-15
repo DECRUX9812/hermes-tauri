@@ -49,15 +49,30 @@
   };
 
   // WebKitGTK has no default reload accelerator (Electron reloads on F5 and
-  // Ctrl/Cmd+R). Reload http(s) pages only, and never during IME composition.
+  // Ctrl/Cmd+R). Reload pages of the backend UI only: the session token the
+  // bootstrap consumed lives in sessionStorage (`hermes.webapp.session.*`,
+  // written by the UI on the backend origin), so its presence identifies a
+  // page where reloading keeps an authenticated session. Never reload a
+  // foreign page, and never during IME composition or while the key auto-
+  // repeats (review F5, F6).
+  const canReload = () => {
+    if (location.protocol !== 'http:' && location.protocol !== 'https:') return false;
+    try {
+      for (let i = 0; i < sessionStorage.length; i++) {
+        if (sessionStorage.key(i).startsWith('hermes.webapp.session')) return true;
+      }
+    } catch {}
+    return false;
+  };
   window.addEventListener(
     'keydown',
     event => {
+      if (event.repeat) return;
       if (event.isComposing || event.keyCode === 229) return;
       const reload =
         event.key === 'F5' ||
         ((event.ctrlKey || event.metaKey) && (event.key === 'r' || event.key === 'R'));
-      if (reload) {
+      if (reload && canReload()) {
         event.preventDefault();
         location.reload();
       }
