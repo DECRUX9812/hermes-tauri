@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
-PIN="$(cd -- "$REPO_ROOT/../_hermes-pin" && pwd)"
+PIN="${HERMES_TAURI_PIN:-$REPO_ROOT/../_hermes-pin}"
 DEFAULT_STATE_DIR=/tmp/hermes-tauri-test
 STATE_DIR="${HERMES_TAURI_TEST_DIR:-$DEFAULT_STATE_DIR}"
 
@@ -28,6 +28,7 @@ resolve_state_dir() {
 resolve_state_dir
 
 require_pin() {
+  [[ -d "$PIN" ]] || fail "pinned Hermes checkout not found at $PIN; set HERMES_TAURI_PIN to an absolute path"
   [[ -f "$PIN/hermes" ]] || fail 'pinned Hermes checkout is missing'
   [[ -f "$PIN/apps/desktop/dist-webapp/index.html" ]] || fail 'pinned webapp build is missing'
 }
