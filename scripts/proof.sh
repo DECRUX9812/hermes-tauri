@@ -569,14 +569,13 @@ group_chat_shot() {
 
 spawn_shutdown_check() {
   printf 'proof: spawn-shutdown check, state dir %s\n' "$SPAWN_DIR"
-  local line words spawn_json spawn_port
+  local spawn_json spawn_port
   local -a pids=() pgids=()
-  line="$(HERMES_TAURI_TEST_DIR="$SPAWN_DIR" "$TEST_HERMES" cmd)" || die 'could not build the spawn command'
-  words="${line#HERMES_TAURI_CMD=}"
-  eval "SPAWN_WORDS=($words)"
-  spawn_json="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "${SPAWN_WORDS[@]}")" || \
-    die 'could not encode the spawn command'
-  spawn_port="$(printf '%s\n' "${SPAWN_WORDS[@]}" | awk '/^--port$/{getline; print; exit}')"
+  spawn_json="$(HERMES_TAURI_TEST_DIR="$SPAWN_DIR" "$TEST_HERMES" cmd)" || die 'could not build the spawn command'
+  python3 -c 'import json, sys; arr = json.loads(sys.argv[1]); sys.exit(0 if isinstance(arr, list) and all(isinstance(x, str) for x in arr) else 1)' "$spawn_json" 2>/dev/null || \
+    die 'the spawn command is not a JSON list of strings'
+  spawn_port="$(python3 -c 'import json, sys; arr = json.loads(sys.argv[1]); i = arr.index("--port"); print(arr[i + 1])' "$spawn_json" 2>/dev/null)" || \
+    die 'the spawn command carries no port'
   [[ -n "$spawn_port" ]] || die 'the spawn command carries no port'
 
   export HERMES_TAURI_CMD="$spawn_json"
