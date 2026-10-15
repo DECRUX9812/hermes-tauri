@@ -1,6 +1,7 @@
 use std::ffi::OsString;
 use std::fmt;
 use std::fs;
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 
 use hermes_sidecar::{is_attach_url, redact, SidecarConfig};
@@ -17,6 +18,9 @@ pub enum Source {
     EnvCmd,
     /// The config file at this path.
     ConfigFile(PathBuf),
+    /// The bundled Python payload (docs/python-sidecar.md) under
+    /// [`Bundled::payload_dir`].
+    Bundled,
     /// A `hermes` executable found at this path on PATH.
     DefaultOnPath(PathBuf),
 }
@@ -28,6 +32,7 @@ impl fmt::Debug for Source {
             Source::EnvUrl => f.write_str("EnvUrl"),
             Source::EnvCmd => f.write_str("EnvCmd"),
             Source::ConfigFile(path) => f.debug_tuple("ConfigFile").field(path).finish(),
+            Source::Bundled => f.write_str("Bundled"),
             Source::DefaultOnPath(path) => f.debug_tuple("DefaultOnPath").field(path).finish(),
         }
     }
@@ -43,6 +48,22 @@ pub enum Resolved {
     /// No source produced anything: no flag, no env, no config file, no
     /// `hermes` on PATH.
     NotConfigured,
+}
+
+/// The bundled Python payload and the directory its state belongs in.
+///
+/// `payload_dir` is the resource directory at runtime: it holds
+/// `hermes-payload/` (launcher, relocatable venv, UI dist) and `python/`.
+/// `data_dir` is the per-user app-data directory; the payload never writes
+/// into `payload_dir`, which is read-only in a deb.
+///
+/// Unix only for now: the payload's launcher is a POSIX `sh` script and there
+/// is no Windows launcher yet (docs/python-sidecar.md §5.4), so the bundled
+/// source never matches on Windows.
+#[derive(Clone, Debug)]
+pub struct Bundled {
+    pub payload_dir: PathBuf,
+    pub data_dir: PathBuf,
 }
 
 /// The plain values the shell collects at startup. Passed by value so tests
@@ -166,6 +187,11 @@ pub enum ConfigError {
     },
     #[error("Invalid Hermes URL: {0}")]
     InvalidUrl(String),
+    #[error("Could not pick a free loopback port for the bundled Hermes payload: {source}")]
+    NoLoopbackPort {
+        #[source]
+        source: std::io::Error,
+    },
 }
 
 /// Arguments after the program for the spawned default instance, so a stray
@@ -191,6 +217,26 @@ const EXECUTABLE_NAMES: [&str; 1] = ["hermes"];
 /// (both attach), then `HERMES_TAURI_CMD` (spawn), then `config.toml`, then a
 /// `hermes` executable on PATH (spawn), then nothing.
 pub fn resolve(inputs: &Inputs) -> Result<Resolved, ConfigError> {
+    resolve_with_bundled(inputs, None)
+}
+
+/// As [`resolve`], with the bundled Python payload as an extra source.
+///
+/// Source order, first match wins: the `--url` flag, then `HERMES_TAURI_URL`
+/// (both attach), then `HERMES_TAURI_CMD` (spawn), then `config.toml`, then
+/// `bundled` (spawn), then a `hermes` executable on PATH (spawn), then
+/// nothing. The bundled source only matches when the payload is present and
+/// runnable (see [`bundled_spawn`]).
+///
+/// A `config.toml` that sets `url` and no `command` asks the shell to spawn
+/// its own backend when that URL does not answer; without a bundled payload
+/// there is nothing to spawn and the sidecar reports `NoCommand`, so with one
+/// the bundled payload becomes that fallback. A `command` in the file still
+/// wins, and `spawn_if_unreachable = false` still means "attach or fail".
+pub fn resolve_with_bundled(
+    inputs: &Inputs,
+    bundled: Option<&Bundled>,
+) -> Result<Resolved, ConfigError> {
     if let Some(url) = cli_url(&inputs.args)? {
         return attach(url, Source::CliArg);
     }
@@ -212,14 +258,28 @@ pub fn resolve(inputs: &Inputs) -> Result<Resolved, ConfigError> {
 
     let file_path = inputs.config_dir.join("config.toml");
     if let Some(file) = read_config_file(&file_path)? {
-        if let Some(config) = config_from_file(file)? {
+        if let Some(mut config) = config_from_file(file)? {
+            if config.command.is_empty() && config.spawn_if_unreachable {
+                if let Some(fallback) = bundled_spawn(bundled)? {
+                    config.command = fallback.command;
+                    config.env = with_overrides(fallback.env, config.env);
+                }
+            }
             return Ok(Resolved::Configured {
                 config,
                 source: Source::ConfigFile(file_path),
             });
         }
         // The file parsed but names neither a URL nor a command; treat it as
-        // no configuration and fall through to the PATH default.
+        // no configuration and fall through to the bundled payload and the
+        // PATH default.
+    }
+
+    if let Some(config) = bundled_spawn(bundled)? {
+        return Ok(Resolved::Configured {
+            config,
+            source: Source::Bundled,
+        });
     }
 
     if let Some(program) = find_on_path(inputs.path.as_deref()) {
@@ -235,6 +295,101 @@ pub fn resolve(inputs: &Inputs) -> Result<Resolved, ConfigError> {
     }
 
     Ok(Resolved::NotConfigured)
+}
+
+/// The bundled payload as a spawn config, or `None` when it is not usable:
+/// no `Bundled`, a relative `payload_dir` (it would be resolved against the
+/// shell's working directory), or no executable launcher.
+///
+/// Nothing is created on disk here. At startup the payload makes its own
+/// directories under `data_dir`: `hermes_plus` creates `$HERMES_HOME/hermes-plus`
+/// (`adapter/paths.py:plus_home`) and the stock Hermes child creates the rest
+/// of `$HERMES_HOME`.
+fn bundled_spawn(bundled: Option<&Bundled>) -> Result<Option<SidecarConfig>, ConfigError> {
+    let Some(bundled) = bundled else {
+        return Ok(None);
+    };
+    let Some(launcher) = bundled_launcher(&bundled.payload_dir) else {
+        return Ok(None);
+    };
+    // `hermes_plus` refuses `--port 0` (`ServeSettings.validate` requires
+    // 1..=65535 and `cmd_serve` exits 1), so the shell hands it a port the OS
+    // reports free; `hermes_plus` prints that port back in its login URL,
+    // which is how the sidecar learns the origin.
+    let port = free_loopback_port()?;
+    Ok(Some(SidecarConfig {
+        command: vec![
+            launcher.to_string_lossy().into_owned(),
+            "--host".to_owned(),
+            "127.0.0.1".to_owned(),
+            "--port".to_owned(),
+            port.to_string(),
+        ],
+        env: bundled_env(&bundled.data_dir),
+        ..SidecarConfig::default()
+    }))
+}
+
+/// The payload's launcher, or `None` when it cannot be run.
+#[cfg(unix)]
+fn bundled_launcher(payload_dir: &Path) -> Option<PathBuf> {
+    if !payload_dir.is_absolute() {
+        return None;
+    }
+    let launcher = payload_dir
+        .join("hermes-payload")
+        .join("bin")
+        .join("hermes-sidecar");
+    is_executable_file(&launcher).then_some(launcher)
+}
+
+/// No payload ships for Windows yet, so the bundled source never matches there.
+#[cfg(not(unix))]
+fn bundled_launcher(_payload_dir: &Path) -> Option<PathBuf> {
+    None
+}
+
+/// A port that is free right now on 127.0.0.1, chosen by the OS.
+///
+/// The listener is closed again before the payload binds the port, so a
+/// stolen port makes `uvicorn` fail to bind and the sidecar reports the
+/// child's exit, which the boot page surfaces.
+fn free_loopback_port() -> Result<u16, ConfigError> {
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .map_err(|source| ConfigError::NoLoopbackPort { source })?;
+    let port = listener
+        .local_addr()
+        .map_err(|source| ConfigError::NoLoopbackPort { source })?
+        .port();
+    Ok(port)
+}
+
+/// The environment from docs/python-sidecar.md "Spawn command": all state
+/// lives under `data_dir`, never inside the read-only payload.
+fn bundled_env(data_dir: &Path) -> Vec<(String, String)> {
+    let under = |name: &str| data_dir.join(name).to_string_lossy().into_owned();
+    vec![
+        ("HERMES_HOME".to_owned(), under("hermes")),
+        ("HERMES_RUNTIME_DIR".to_owned(), under("runtime")),
+        ("HERMES_DISABLE_LAZY_INSTALLS".to_owned(), "1".to_owned()),
+        ("PYTHONDONTWRITEBYTECODE".to_owned(), "1".to_owned()),
+    ]
+}
+
+/// The bundled variables first, then the config file's, so a user override of
+/// a bundled variable wins instead of appearing twice.
+fn with_overrides(
+    bundled: Vec<(String, String)>,
+    overrides: Vec<(String, String)>,
+) -> Vec<(String, String)> {
+    let mut env = bundled;
+    for (key, value) in overrides {
+        match env.iter_mut().find(|(existing, _)| *existing == key) {
+            Some(entry) => entry.1 = value,
+            None => env.push((key, value)),
+        }
+    }
+    env
 }
 
 fn attach(url: String, source: Source) -> Result<Resolved, ConfigError> {
