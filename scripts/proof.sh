@@ -443,13 +443,25 @@ capture() {
 }
 
 # Captures one shot, checks the frame is painted and not a copy of an earlier
-# shot, and prints its PASS or FAIL line.
+# shot, and prints its PASS or FAIL line. `timeout` is how long the frame is
+# given to reach `min` colours: a route that paints a loading state first (the
+# Studio page prints "building the studio…" for a while) passes through a frame
+# below the threshold, and the shot must be of the page, not of that state. The
+# last frame is kept when the timeout runs out, so the FAIL still shows what was
+# on screen.
 shot() {
-  local name="$1" min="$2" desc="$3" index earlier
-  if ! capture "$name"; then
-    record "$name" FAIL "-" "-" "the screen could not be captured and read back"
-    return 1
-  fi
+  local name="$1" min="$2" desc="$3" timeout="${4:-0}" index earlier
+  local deadline=$((SECONDS + timeout))
+  while :; do
+    if ! capture "$name"; then
+      record "$name" FAIL "-" "-" "the screen could not be captured and read back"
+      return 1
+    fi
+    if ((CAP_COLOURS >= min)) || ((SECONDS >= deadline)); then
+      break
+    fi
+    sleep 1
+  done
   if ((CAP_COLOURS < min)); then
     record "$name" FAIL "$CAP_COLOURS" "$CAP_MD5" \
       "blank frame: $CAP_COLOURS distinct colours on the sample grid, under $min"
@@ -541,7 +553,7 @@ inner_main() {
       "the app painted its first frame but $windows windows carry the app title: the always-on-top splash is still up"
   elif wait_painted "$MIN_COLOURS" 60; then
     shot 02-sessions "$MIN_COLOURS" \
-      "home route after attaching: the seeded demo session titles in the sidebar and the seeded recent tasks on the page"
+      "home route after attaching: the seeded demo session titles in the sidebar and the seeded recent tasks on the page" 20
   else
     record 02-sessions FAIL "-" "-" "the app never painted after attaching"
   fi
@@ -563,7 +575,7 @@ inner_main() {
   xdotool mousemove --sync "${PARK%,*}" "${PARK#*,}" 2>/dev/null || true
   sleep 1
   shot 06-reload-before "$MIN_COLOURS" \
-    "the group chat view (in-app state on the #/team route) before the reload"
+    "the group chat view (in-app state on the #/team route) before the reload" 20
   xdotool windowfocus "$(window_id)" 2>/dev/null || true
   reload_mark="$(wc -l <"$SHELL_LOG")"
   xdotool key --clearmodifiers F5
@@ -571,7 +583,7 @@ inner_main() {
   # this wait never accepts a painted frame that never left the screen.
   if wait_repaint "$MIN_COLOURS" 45 100000; then
     shot 07-reload-after "$MIN_COLOURS" \
-      "the #/team route after F5: the webview reloaded, repainted from the backend and kept the session"
+      "the #/team route after F5: the webview reloaded, repainted from the backend and kept the session" 20
     reload_session_check "$reload_mark"
   else
     record 07-reload-after FAIL "-" "-" \
@@ -622,7 +634,8 @@ reload_session_check() {
 
 # A deep link followed by a shot: the link must be logged by the running shell
 # and the page must come back painted before the screen is captured.
-nav_shot() {  local name="$1" route="$2" pattern="$3" min="$4" desc="$5"
+nav_shot() {
+  local name="$1" route="$2" pattern="$3" min="$4" desc="$5"
   if ! deeplink "$route" "$pattern" >/dev/null; then
     record "$name" FAIL "-" "-" "the $route deep link was not honoured"
     return 1
@@ -631,7 +644,9 @@ nav_shot() {  local name="$1" route="$2" pattern="$3" min="$4" desc="$5"
     record "$name" FAIL "-" "-" "the screen never came back painted after the $route deep link"
     return 1
   fi
-  shot "$name" "$min" "$desc"
+  # A plugin page can paint its own loading state first (the Studio page prints
+  # "building the studio…" for a while), so the shot is given time to settle.
+  shot "$name" "$min" "$desc" 30
 }
 
 # 05-group-chat: a group chat created through the UI with demo bots and a neutral
@@ -692,7 +707,7 @@ group_chat_shot() {
   sleep 1.0
 
   shot 05-group-chat "$MIN_COLOURS" \
-    "a group chat created through the UI with two demo bots and one submitted neutral message"
+    "a group chat created through the UI with two demo bots and one submitted neutral message" 20
 }
 
 # The splash cap (splash.rs, 30 s) is the safety net for an app page that never
@@ -942,7 +957,10 @@ PY
 }
 
 write_readme() {
-  local index label
+  local index label target="$OUT/README.md"
+  # Spawn mode writes no shots and must not clobber the index of the run that
+  # did, so it gets its own file next to it.
+  [[ "$SPAWN_MODE" == 1 ]] && target="$OUT/README-spawn-shutdown.md"
   {
     printf '# Proof run — %s\n\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     printf "Shell binary: \`%s\`\n\n" "$BIN"
@@ -953,13 +971,15 @@ write_readme() {
     printf 'webview profile and nothing is written to the real home. Both the shell and\n'
     printf 'the backend run from a scratch working directory, so no local path or git\n'
     printf 'branch name is on screen.\n\n'
-    printf '01-boot is the boot page of the main window, with the splash already gone because\n'
-    printf 'the start-up failed. 01b-splash is the splash window itself while the app loads:\n'
-    printf 'the shell keeps its own boot page in front of the window until the app reports its\n'
-    printf 'first painted frame, so there is no blank window. 05-group-chat is a group chat\n'
-    printf 'created through the UI with one typed neutral message, not the seeded "Demo\n'
-    printf 'Product Room": the seeded room does not hydrate in a fresh webview profile (a UI\n'
-    printf 'boot race in the hermes-bots plugin, also in Chromium; see docs/test-hermes.md).\n\n'
+    if [[ "$SPAWN_MODE" != 1 ]]; then
+      printf '01-boot is the boot page of the main window, with the splash already gone because\n'
+      printf 'the start-up failed. 01b-splash is the splash window itself while the app loads:\n'
+      printf 'the shell keeps its own boot page in front of the window until the app reports its\n'
+      printf 'first painted frame, so there is no blank window. 05-group-chat is a group chat\n'
+      printf 'created through the UI with one typed neutral message, not the seeded "Demo\n'
+      printf 'Product Room": the seeded room does not hydrate in a fresh webview profile (a UI\n'
+      printf 'boot race in the hermes-bots plugin, also in Chromium; see docs/test-hermes.md).\n\n'
+    fi
     printf '| shot | result | colours | md5 | what it shows |\n|---|---|---|---|---|\n'
     for index in "${!SHOT_ORDER[@]}"; do
       label="${SHOT_ORDER[$index]}"
@@ -979,7 +999,7 @@ write_readme() {
     printf 'a blank window scores 1 and the boot page (the splash) 9 and up, so every row\n'
     printf 'with a colour count shows real content. A FAIL line means the shot was written\n'
     printf 'and then rejected, never that a stale file was left behind.\n'
-  } >"$OUT/README.md"
+  } >"$target"
 }
 
 if [[ "$INNER" == 1 ]]; then

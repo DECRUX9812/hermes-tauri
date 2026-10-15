@@ -12,30 +12,30 @@ hotkey, deep links or the splash.
 
 | Metric | Electron (v0.17.0 build) | Tauri (T1 build, attach mode; tray/hotkey/updater not yet included) | Tauri (T6 build, attach mode, full T5 shell + splash) | Ratio (Tauri T6 / Electron) |
 |---|---|---|---|---|
-| Size, `linux-unpacked` / raw binary (apparent) | 335.5 MB (351,822,445 bytes, 434 files) | 19.4 MB (20,358,904 bytes, 1 file) | 23.4 MiB (24,501,952 bytes, 1 file) | 0.070x (-93.0%) |
-| Size, `linux-unpacked` / raw binary (on disk) | 336.5 MB | 19.4 MB (20,361,216 bytes) | 23.4 MiB (24,502,272 bytes) | 0.070x (-93.0%) |
-| Size, AppImage | 142 MB, from an earlier build, not re-measured | 85.72 MiB (89,881,080 bytes) * | 87.20 MiB (91,437,560 bytes) | 0.614x (-38.6%) |
-| Size, deb | 114 MB, from an earlier build, not re-measured | 6.84 MiB (7,173,418 bytes) * | 8.33 MiB (8,733,194 bytes) | 0.073x (-92.7%) |
-| Idle RAM, shell PSS median (run 1 / run 2 / run 3) | 414.3 MiB / 436.8 MiB | 390.2 MiB (runs: 390.2 / 390.7 / 388.6) | 403.0 MiB (runs: 409.3 / 396.7) † | 0.973x (-2.7%) |
-| Idle RAM, shell RSS median (run 1 / run 2 / run 3) | 876.2 MiB / 878.3 MiB | 571.5 MiB (runs: 571.5 / 571.8 / 570.0) | 701.4 MiB (runs: 708.1 / 694.6) † | 0.800x (-20.0%) |
-| Idle RAM, processes in shell tree | 7 | 3 (`hermes-tauri`, `WebKitWebProcess`, `WebKitNetworkProcess`) | 17 / 14 † (3 shell processes plus the session bus and portal helpers `dbus-run-session` activates) | 0.43x for the shell itself |
-| RAM after sidebar click, PSS median | 395.5 MiB (RSS 836.3 MiB; Messaging page) | 391.8 MiB (RSS 573.1 MiB; runs: 391.8 / 392.9 / 388.1; `#/team`) | 397.1 MiB (RSS 689.9 MiB; `#/team`) † | 1.004x PSS / 0.825x RSS |
-| Window startup, median of 3 cold runs | 2434.1 ms (runs: 2211.8, 2514.3, 2434.1) | 6725.4 ms (runs: 10262.2, 6725.4, 6481.1) | 2940.1 ms (runs: 2940.1, 3146.9, 2843.5) — the splash | 1.208x |
-| Window startup to the remote UI painted, median of 3 | 2434.1 ms (same event for Electron: no local splash) | not measured (no splash existed) | 6328.7 ms (runs: 6647.5, 6328.7, 6150.1) | 2.60x |
-| **Ratio (Tauri T6 / Electron)** | **1.0x baseline** | — | **Binary 0.070x, Deb 0.073x, AppImage 0.614x, Idle RSS 0.800x, Idle PSS 0.973x, Startup-to-splash 1.208x, Startup-to-remote-UI 2.60x** | **—** |
+| Size, `linux-unpacked` / raw binary (apparent) | 335.5 MB (351,822,445 bytes, 434 files) | 19.4 MB (20,358,904 bytes, 1 file) | 23.4 MiB (24,502,648 bytes, 1 file) | 0.070x (-93.0%) |
+| Size, `linux-unpacked` / raw binary (on disk) | 336.5 MB | 19.4 MB (20,361,216 bytes) | 23.4 MiB (24,510,464 bytes) | 0.070x (-93.0%) |
+| Size, AppImage | 142 MB, from an earlier build, not re-measured | 85.72 MiB (89,881,080 bytes) * | 87.19 MiB (91,429,368 bytes) | 0.614x (-38.6%) |
+| Size, deb | 114 MB, from an earlier build, not re-measured | 6.84 MiB (7,173,418 bytes) * | 8.32 MiB (8,727,998 bytes) | 0.073x (-92.7%) |
+| Idle RAM, shell PSS median (run 1 / run 2 / run 3) | 414.3 MiB / 436.8 MiB | 390.2 MiB (runs: 390.2 / 390.7 / 388.6) | 403.0 MiB (runs: 405.8 / 400.2) † | 0.973x (-2.7%) |
+| Idle RAM, shell RSS median (run 1 / run 2 / run 3) | 876.2 MiB / 878.3 MiB | 571.5 MiB (runs: 571.5 / 571.8 / 570.0) | 711.5 MiB (runs: 713.7 / 709.2) † | 0.812x (-18.8%) |
+| Idle RAM, processes in shell tree | 7 | 3 (`hermes-tauri`, `WebKitWebProcess`, `WebKitNetworkProcess`) | 17 (3 shell processes plus the session bus and portal helpers `dbus-run-session` activates) † | 0.43x for the shell itself |
+| RAM after sidebar click, PSS median | 395.5 MiB (RSS 836.3 MiB; Messaging page) | 391.8 MiB (RSS 573.1 MiB; runs: 391.8 / 392.9 / 388.1; `#/team`) | 415.3 MiB (RSS 702.6 MiB; `#/team`) † | 1.050x PSS / 0.840x RSS |
+| Window startup, median of 3 cold runs | 2434.1 ms (runs: 2211.8, 2514.3, 2434.1) | 6725.4 ms (runs: 10262.2, 6725.4, 6481.1) | 2024.7 ms (runs: 2024.7, 2839.1, 1834.8) — the splash | 0.832x |
+| Window startup to the remote UI painted, median of 3 | 2434.1 ms (same event for Electron: no local splash) | not measured (no splash existed) | 6443.0 ms (runs: 7328.3, 6234.3, 6443.0) | 2.65x |
+| **Ratio (Tauri T6 / Electron)** | **1.0x baseline** | — | **Binary 0.070x, Deb 0.073x, AppImage 0.614x, Idle RSS 0.812x, Idle PSS 0.973x, Startup-to-splash 0.832x, Startup-to-remote-UI 2.65x** | **—** |
 
 \* Bundle files under `$HOME/.cache/hermes-tauri/target/release/bundle/` had mtimes from 01:33–01:34 UTC (concurrent T5 build), so frozen T1 bundle sizes from `.oc/brief/T1-report.md` are reported. Raw binary measured directly from `$HOME/.cache/hermes-tauri/bin-t1/hermes-tauri`.
 
 † The T6 RAM runs use the T12 wrapper form (`dbus-run-session -- <binary>`, a private session bus per run),
 which the Electron and T1 runs did not. The harness counts every process in the measured session, so the
 T6 tree also holds the session bus, the accessibility bus and the XDG portal helpers that bus activates
-(11–14 extra processes, about 21 MiB PSS together). The shell-only subset — `hermes-tauri`,
-`WebKitWebProcess`, `WebKitNetworkProcess` — is 387.8 / 374.8 MiB PSS idle (median 381.3, 0.977x the T1
-figure) and 380.8 MiB after the click, so the shell itself did not grow; the whole-tree figures above are
+(11–14 extra processes, about 20 MiB PSS together). The shell-only subset — `hermes-tauri`,
+`WebKitWebProcess`, `WebKitNetworkProcess` — is 384.8 / 379.2 MiB PSS idle (median 382.0, 0.979x the T1
+figure) and 399.0 MiB after the click, so the shell itself did not grow; the whole-tree figures above are
 what the harness prints for this method.
 
 The T6 binary is `$HOME/.cache/hermes-tauri/target-T6/release/hermes-tauri`, sha256
-`f905110a4636e8406b74b51ab13b66dccea0e961e2bed0fece265cc708b0c58f`, built from branch `t6-proof`. Both
+`2893f25ba0f222011d5c0e4a6388451b086a3f342e8b9df88fab10bc4ba7e300`, built from branch `t6-proof`. Both
 bundles come from the same `cargo tauri build --bundles deb,appimage` step; the AppImage was also launched
 once with `APPIMAGE_EXTRACT_AND_RUN=1` and reached the app's first painted frame.
 
@@ -101,14 +101,19 @@ recorded:
 
 | set | runs (ms) | median (ms) | what the clock stops at | load before -> after |
 |---|---|---|---|---|
-| T6, first painted window | 2940.1, 3146.9, 2843.5 | 2940.1 | the splash: the first window with real content | 10.48 -> 10.66 |
-| T6, remote UI painted | 6647.5, 6328.7, 6150.1 | 6328.7 | the app's own `First frame of the Hermes app painted` log line | 10.66 -> 9.50 |
+| T6, first painted window | 2024.7, 2839.1, 1834.8 | 2024.7 | the splash: the first window with real content | 14.95 -> 15.03 |
+| T6, remote UI painted | 7328.3, 6234.3, 6443.0 | 6443.0 | the app's own `First frame of the Hermes app painted` log line | 15.03 -> 13.84 |
 
-The first figure is what a user sees: **2.9 s instead of 6.7 s** (T1) and instead of a flat single colour
+The first figure is what a user sees: **2.0 s instead of 6.7 s** (T1) and instead of a flat single colour
 for the whole gap. The second figure is the honest time to the remote UI, unchanged in kind from T12's
-~6-10 s and 0.94x T1's 6725.4 ms and 0.66x T12's back-to-back 9543.8 ms, both measured under different
+~6-10 s: 0.96x T1's 6725.4 ms and 0.67x T12's back-to-back 9543.8 ms, both measured under different
 load. The gap between the two rows is the app's JavaScript bundle executing in JavaScriptCore (T14: FCP
 ~4.4 s in WebKitGTK vs ~2.8 s in Chromium, ~3.2 s of it JS after `domInteractive`).
+
+An earlier set of the same two measurements on the same binary at load 10.5 gave 2940.1 ms and 6328.7 ms,
+so the splash figure moves with the machine (2.0-2.9 s) while the remote-UI figure is stable (6.3-6.4 s).
+The splash number is not a race the shell can lose: the splash is a separate always-on-top window, so it
+is on screen as soon as WebKit paints it, whatever the app's page is doing behind it.
 
 The harness measures the first painted window with `--stop-log` for the second row, because the window
 check cannot tell the splash from the app behind it: both are 1280x820 with the same title. `--stop-log`
@@ -300,8 +305,8 @@ scripts/measure.sh startup --label tauri-t6-remoteui --env-file <env> --runs 3 \
 
 - T1 idle PSS breakdown (median run): `hermes-tauri` 77.3 MiB, `WebKitNetworkProcess` 25.1 MiB, `WebKitWebProcess` 287.7 MiB (total 390.2 MiB PSS, 571.5 MiB RSS).
 - T1 after click to `#/team` (median run): `hermes-tauri` 77.4 MiB, `WebKitNetworkProcess` 25.1 MiB, `WebKitWebProcess` 289.2 MiB (total 391.8 MiB PSS, 573.1 MiB RSS).
-- T6 idle PSS breakdown (run 1 / run 2): `hermes-tauri` 76.0 / 76.3 MiB, `WebKitNetworkProcess` 23.3 / 23.3 MiB, `WebKitWebProcess` 288.5 / 275.2 MiB. The rest of the tree is the session bus, the accessibility bus and the XDG portal helpers (`xdg-desktop-portal` 4.5, `xdg-desktop-portal-gtk` 5.2, `glycin-image-rs` 4.7, `dbus-daemon` 1.2, `gvfsd` 1.1, `at-spi2-registryd` 1.0, and smaller ones), about 21 MiB PSS together.
-- T6 after the click to `#/team`: `hermes-tauri` 76.1 MiB, `WebKitNetworkProcess` 23.2 MiB, `WebKitWebProcess` 281.5 MiB.
+- T6 idle PSS breakdown (run 1 / run 2): `hermes-tauri` 72.4 / 72.2 MiB, `WebKitNetworkProcess` 23.6 / 23.5 MiB, `WebKitWebProcess` 288.8 / 283.5 MiB. The rest of the tree is the session bus, the accessibility bus and the XDG portal helpers (`xdg-desktop-portal-gtk` 4.7 / 4.9, `glycin-image-rs` 4.7 / 4.6, `xdg-desktop-portal` 4.3 / 4.3, `dbus-daemon` 1.2, `gvfsd` 1.1, `at-spi2-registryd` 0.9, and smaller ones), about 20 MiB PSS together.
+- T6 after the click to `#/team`: `hermes-tauri` 78.1 MiB, `WebKitNetworkProcess` 24.1 MiB, `WebKitWebProcess` 296.8 MiB.
 - T6 egress check: `{"external_connections": 0, "listening": {}, "loopback_peers": {"127.0.0.1:18800": 3}}` — zero external network connections; only local loopback to the test Hermes daemon. WebKit's traffic is counted the same way as Chromium's.
 - Backend processes: 0 (attach mode).
 
@@ -322,9 +327,9 @@ scripts/measure.sh startup --label tauri-t6-remoteui --env-file <env> --runs 3 \
 - The T6 startup "first painted window" is the splash, and its clock stops when the harness first sees a
   window with content; the `--stop-log` row stops when the shell logs the app's first frame. Neither is a
   compositor-level callback, and both run under software rendering (llvmpipe) on a shared machine at load
-  10.5, so treat the absolute milliseconds as an upper bound; the 2.3x improvement over T1's same-harness
+  15, so treat the absolute milliseconds as an upper bound; the 3.3x improvement over T1's same-harness
   figure is the meaningful part.
-- The T6 runs overlap other jobs' builds and X servers (load 3.6-11.9 on 8 CPUs during the sets above).
+- The T6 runs overlap other jobs' builds and X servers (load 3.6-29.1 on 8 CPUs during the sets above).
   The T1 and Electron columns were measured hours earlier under a different load.
 - Two T6 RAM runs, not three: the lock is shared and each RAM run holds it for the full settle and sample
   window. The two idle figures differ by 3% (409.3 vs 396.7 MiB), so the median is quoted with both runs.

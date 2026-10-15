@@ -33,6 +33,30 @@ Checks (no PNG; each is reported as PASS or FAIL next to the shots):
   loading, left one window, and the app painted afterwards. That is the same code path as the 30 s default, shortened so the removal
   can be observed at all (the app paints in 6-9 s, so the real cap is exactly the case that never happens).
 
+### The final run
+
+One run of `scripts/proof.sh --bin $HOME/.cache/hermes-tauri/target-T6/release/hermes-tauri --out ~/Videos/tauri-shots`:
+
+| shot | result | colours | md5 | what it shows |
+|---|---|---|---|---|
+| 01-boot.png | PASS | 13 | ffaf880ddc80962602da94957eb42ee1 | boot page while Hermes is unreachable: launched against the closed port 18802, the page reports it and offers Retry |
+| 01b-splash.png | PASS | 9 | 83ea90fbd436d532443f759f25472658 | the splash (the boot page) still in front of the window while the Hermes app loads, before its first frame |
+| 02-sessions.png | PASS | 21 | ba5847ea844c591b28a43bcfd8305cf4 | home route after attaching: the seeded demo session titles in the sidebar and the seeded recent tasks on the page |
+| 03-plugin-rail.png | PASS | 16 | 620bf4fffaebf57399f314334139b4da | the Kanban plugin page reached by deep link, the plugin rail on the far left |
+| 04-team.png | PASS | 24 | 24fc6d4b63f7b8698e1f59766c66d6d7 | the Demo Product Team page reached by deep link |
+| 05-group-chat.png | PASS | 19 | fc179d11fa054910173a0d05d574f059 | a group chat created through the UI with two demo bots and one submitted neutral message |
+| 06-reload-before.png | PASS | 19 | 1e8da1b55d64cff5d840aeeb6db6a5eb | the group chat view (in-app state on the #/team route) before the reload |
+| 07-reload-after.png | PASS | 29 | 2f29e0b6c759cb4688a2350546a7a849 | the #/team route after F5: the webview reloaded, repainted from the backend and kept the session |
+| 08-deeplink.png | PASS | 216 | 13270770ba1759656567d3d3891a1d64 | the same window after a second invocation handed it the /studio route |
+
+| check | result | what it proves |
+|---|---|---|
+| reload-session | PASS | F5 re-navigated the webview to the same #/team route, the app painted again from the backend, no second window and no connection error: the session survived the reload |
+| splash-cap | PASS | the cap removed the always-on-top splash while the app was still loading (same code path as the 30 s default, shortened to 3000 ms); one window was left and the app painted afterwards |
+
+`--spawn-shutdown` passed in its own run: the shell started its own Hermes (pid 3289628, pgid 3289628) and SIGTERM to the shell
+stopped it within 1 s, with no surviving pid or pgid.
+
 ## Reproducing the proof (T6 build, `scripts/proof.sh`)
 
 One lock-free driver: it starts a disposable test Hermes, re-executes itself under a private D-Bus session and Xvfb, drives the shell
@@ -40,7 +64,7 @@ with real input only, and writes the nine shots plus an index into the output di
 
 ```sh
 scripts/proof.sh --bin "$HOME/.cache/hermes-tauri/target-T6/release/hermes-tauri" --out ~/Videos/tauri-shots
-scripts/proof.sh --bin "$HOME/.cache/hermes-tauri/target-T6/release/hermes-tauri" --out ~/Videos/tauri-shots --spawn-shutdown
+scripts/proof.sh --bin "$HOME/.cache/hermes-tauri/target-T6/release/hermes-tauri" --out /tmp/hermes-tauri-t6-spawn --spawn-shutdown
 ```
 
 - `--bin PATH` shell binary to drive (default `$HOME/.cache/hermes-tauri/target/release/hermes-tauri`).
@@ -48,7 +72,8 @@ scripts/proof.sh --bin "$HOME/.cache/hermes-tauri/target-T6/release/hermes-tauri
 - `--port-dir DIR` state dir of the disposable test Hermes (default `/tmp/hermes-tauri-test-proof`). It must live under
   `/tmp/hermes-tauri-test*`, so the proof can never talk to a real Hermes.
 - `--spawn-shutdown` skips the shot list: the shell starts its own Hermes from `HERMES_TAURI_CMD`, then receives SIGTERM and the
-  script proves by recorded pid and pgid that no spawned backend survived.
+  script proves by recorded pid and pgid that no spawned backend survived. It clears `*.png` in `--out` like the shot run does, so
+  give it its own directory if you want to keep a shot run's images.
 
 Everything runs from a scratch working directory, the shell's XDG dirs are redirected under `--out` (fresh webview profile per run,
 nothing written to the real home), and the window is placed at 0,0 sized 1280x820 on the 1440x900 root, so the black margin is the bare
