@@ -46,10 +46,21 @@ pub fn handle_new_window(
             }
         },
         PopupDecision::OpenExternal => {
+            sidecar::log(&format!(
+                "Opening externally: {}",
+                hermes_sidecar::redact(url.as_str())
+            ));
             open_external(app, &url);
             NewWindowResponse::Deny
         }
-        PopupDecision::Deny => NewWindowResponse::Deny,
+        PopupDecision::Deny => {
+            // Dropped: say so in the log (the URL is redacted on principle).
+            sidecar::log(&format!(
+                "Denied a popup {}",
+                hermes_sidecar::redact(url.as_str())
+            ));
+            NewWindowResponse::Deny
+        }
     }
 }
 

@@ -52,10 +52,16 @@ class FixtureDaemon(dbus.service.Object):
 def main() -> None:
     DBusGMainLoop(set_as_default=True)
     bus = dbus.SessionBus()
-    dbus.service.BusName(IFACE, bus=bus)
+    # Keep the name object alive: if it is garbage collected, dbus-python
+    # releases the well-known name and clients trigger dbus activation of the
+    # desktop's (absent) notification daemon instead of reaching this fixture.
+    name = dbus.service.BusName(IFACE, bus=bus)
     FixtureDaemon(bus)
     print("fixture notification daemon ready", flush=True)
-    GLib.MainLoop().run()
+    try:
+        GLib.MainLoop().run()
+    finally:
+        del name
 
 
 if __name__ == "__main__":

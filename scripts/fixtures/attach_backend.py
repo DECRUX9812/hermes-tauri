@@ -95,7 +95,11 @@ PAGE = """<!doctype html>
       <a href="https://example.com/" style="padding: 48px; border: 4px solid #555">PREVIEW BLOB - go foreign</a>
     </body></html>`;
     const blobUrl = URL.createObjectURL(new Blob([previewSource], { type: 'text/html' }));
+    // Two variants: the spec shape with noopener and a plain one. WebKitGTK
+    // may suppress the new-window signal for noopener opens, so the proof
+    // tries both and the shell log says which reached it.
     window.open(blobUrl, '_blank', 'noopener,noreferrer');
+    window.open(blobUrl, '_blank');
     document.querySelector('#popup-result').textContent = `requested ${blobUrl.slice(0, 24)}…`;
     const probeFrame = (stateId, configure) => {
       const frame = document.createElement('iframe');
