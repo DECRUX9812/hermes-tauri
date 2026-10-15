@@ -13,7 +13,8 @@ mkdir -p "$CACHE/cargo" "$CACHE/target"
 # Containers run in dockerd's cgroup, not the caller's, so cap memory here.
 MEM="${HERMES_TAURI_BUILDER_MEM:-6g}"
 
-exec flock /tmp/hermes-build.lock docker run --rm \
+# --init: without a PID 1 that reaps orphans, killed grandchildren stay zombies and process-group liveness checks never see them exit.
+exec flock /tmp/hermes-build.lock docker run --rm --init \
   --memory "$MEM" --memory-swap "$MEM" \
   --user "$(id -u):$(id -g)" \
   -e HOME=/tmp \

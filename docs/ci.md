@@ -33,8 +33,10 @@ Runs code quality and verification checks on every push, PR, and tag:
 - **Caching**: `Swatinem/rust-cache@v2`.
 - **Quality Checks**:
   - Formatting: `cargo fmt --all -- --check`
-  - Linting: `cargo clippy --workspace --all-targets -- -D warnings`
-  - Test Suite: `cargo test --workspace`
+  - Linting: `cargo clippy --workspace --all-targets --locked -- -D warnings`
+  - Test Suite: `cargo test --workspace --locked`
+
+Clippy, the tests, and the release build pass `--locked`, so CI builds from the committed `Cargo.lock` and fails instead of re-resolving it.
 
 ---
 
