@@ -6,3 +6,4 @@ dist-release/
 *.AppImage
 *.deb
 src-tauri/gen/schemas
+src-tauri/payload/

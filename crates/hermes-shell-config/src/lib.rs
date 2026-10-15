@@ -7,9 +7,13 @@
 mod config;
 mod deeplink;
 mod hotkey;
+#[cfg(unix)]
+mod payload_install;
 mod updater;
 
 pub use config::{resolve, resolve_with_bundled, Bundled, ConfigError, Inputs, Resolved, Source};
 pub use deeplink::{from_args, parse, DeepLinkError, Route};
 pub use hotkey::{hotkey, DEFAULT_HOTKEY};
+#[cfg(unix)]
+pub use payload_install::{ensure_unpacked, read_manifest, InstallError, Manifest};
 pub use updater::{settings, UpdaterSettings, CHECK_INTERVAL, FIRST_CHECK_DELAY};

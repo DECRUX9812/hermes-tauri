@@ -1,0 +1,9 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "resources": {
+      "payload/hermes-payload.tar.zst": "hermes-payload.tar.zst",
+      "payload/payload-manifest.json": "payload-manifest.json"
+    }
+  }
+}

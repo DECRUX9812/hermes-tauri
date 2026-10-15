@@ -7,10 +7,20 @@ use std::sync::{
 use std::thread;
 use std::time::Duration;
 
-use hermes_shell_config::Resolved;
+use hermes_shell_config::{Resolved, Route};
 use hermes_sidecar::{redact, Backend, Phase, SidecarConfig};
 use serde::Serialize;
 use tauri::{ipc::CapabilityBuilder, AppHandle, Emitter, Manager, State, Url};
+
+use crate::config;
+#[cfg(unix)]
+use crate::payload::{self, PayloadSource};
+
+/// The payload to install. Windows ships none (the payload's launcher is a
+/// POSIX `sh` script, docs/python-sidecar.md §5.4), so there the value is a
+/// single compile-time `None` and the `payload` module does not exist.
+#[cfg(not(unix))]
+type PayloadSource = ();
 
 const PENDING_ROUTE_POLL: Duration = Duration::from_millis(250);
 const PENDING_ROUTE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -25,6 +35,9 @@ const ATTEMPT_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 #[serde(rename_all = "snake_case")]
 pub enum BootPhase {
     NoConfig,
+    /// The bundled payload is being unpacked (a first run, before any
+    /// connection attempt is possible).
+    Preparing,
     Probing,
     Starting,
     Waiting,
@@ -53,6 +66,16 @@ impl BootStatus {
     fn no_config() -> Self {
         Self {
             phase: BootPhase::NoConfig,
+            origin: None,
+            error: None,
+        }
+    }
+
+    /// The bundled payload is being installed; the boot page explains the wait
+    /// instead of showing an empty window.
+    fn preparing() -> Self {
+        Self {
+            phase: BootPhase::Preparing,
             origin: None,
             error: None,
         }
@@ -120,9 +143,10 @@ struct Inner {
     /// Signalled by the attempt thread once it has finished (and the spawned
     /// process group, if any, has been killed) after a shutdown cancel.
     attempt_done_rx: Option<mpsc::Receiver<()>>,
-    /// True from the moment the launch URL (which carries the session token
-    /// in its fragment) is navigated to until the page has consumed the
-    /// token. Deep-link routes wait for it (review F1).
+    /// True from the moment the launch URL (which carries the session
+    /// credential, as a `#hermes-session=` fragment or a `?token=` query) is
+    /// navigated to until the page has consumed it. Deep-link routes wait for
+    /// it (review F1).
     launching: bool,
 }
 
@@ -131,18 +155,29 @@ struct Inner {
 pub struct BootManager {
     inner: Arc<Mutex<Inner>>,
     generation: Arc<AtomicU64>,
-    resolved: Arc<Result<Resolved, String>>,
+    /// The app config directory, where `config.toml` is read from. Resolution
+    /// happens per attempt (see [`BootManager::resolve`]), not here.
+    config_dir: Arc<Option<PathBuf>>,
+    /// The bundled payload this build ships, when it ships one.
+    payload: Arc<Option<PayloadSource>>,
     log_path: Arc<Option<PathBuf>>,
     capability_origin: Arc<Mutex<Option<String>>>,
 }
 
 impl BootManager {
-    pub fn new(resolved: Result<Resolved, String>, log_path: Option<PathBuf>) -> Self {
-        let initial = match &resolved {
-            Err(error) => BootStatus::unreachable(None, error.clone()),
-            Ok(Resolved::NotConfigured) => BootStatus::no_config(),
-            Ok(Resolved::Configured { .. }) => BootStatus::probing(None),
-        };
+    /// `payload` is the archive a payload build ships in its resource dir
+    /// (T16b), or `None` for every other build: the shell then resolves its
+    /// backend from the environment, `config.toml` and PATH exactly as before.
+    ///
+    /// A payload is only *unpacked* in [`Self::prepare`], on a spawned thread;
+    /// until that finishes the status is `Preparing`, which is why this
+    /// constructor cannot know yet whether a backend will be found.
+    pub fn new(
+        config_dir: Option<PathBuf>,
+        payload: Option<PayloadSource>,
+        log_path: Option<PathBuf>,
+    ) -> Self {
+        let initial = start_status(payload.is_some());
         Self {
             inner: Arc::new(Mutex::new(Inner {
                 status: initial,
@@ -155,41 +190,34 @@ impl BootManager {
                 launching: false,
             })),
             generation: Arc::new(AtomicU64::new(0)),
-            resolved: Arc::new(resolved),
+            config_dir: Arc::new(config_dir),
+            payload: Arc::new(payload),
             log_path: Arc::new(log_path),
             capability_origin: Arc::new(Mutex::new(None)),
         }
     }
 
-    /// Starts the first connection attempt. Called once from setup.
-    pub fn start(&self, app: AppHandle) {
-        let config = match self.resolved.as_ref() {
-            Ok(Resolved::Configured { config, .. }) => config.clone(),
-            // No attempt will run, so the splash would stay up forever over a
-            // main window that already shows the same boot page.
-            Ok(Resolved::NotConfigured) => {
-                crate::splash::dismiss(&app, "no Hermes is configured");
-                return;
-            }
-            Err(error) => {
-                crate::splash::dismiss(&app, error);
-                return;
-            }
-        };
-        let attempt = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
-        let (done_tx, done_rx) = mpsc::channel();
-        lock(&self.inner).attempt_done_rx = Some(done_rx);
-        let manager = self.clone();
-        thread::spawn(move || {
-            manager.connect(app, attempt, config);
-            let _ = done_tx.send(());
-        });
+    /// Starts the first connection attempt. Called once from setup, which
+    /// returns before this finishes: a first run unpacks the bundled payload
+    /// (seconds) and that must not hold up the boot page.
+    ///
+    /// Resolution runs on the attempt thread, so a missing configuration or a
+    /// failed payload install is published as a status (NoConfig/Unreachable)
+    /// rather than returned here; `set_status` dismisses the splash for those
+    /// failure phases, which is the only path that does.
+    pub fn prepare(&self, app: AppHandle) {
+        self.spawn_attempt(app);
     }
 
-    /// Runs the connection again from the boot page. When a previous attempt
-    /// left a stored backend behind an unreachable status (a capability or
-    /// navigation failure after connect), it is dropped so this attempt is
-    /// real.
+    /// Runs the connection again from the boot page: the source is resolved
+    /// from scratch (so a failed payload install is retried, and a changed
+    /// `config.toml` is picked up) and a previous attempt is cancelled and
+    /// awaited first. When a previous attempt left a stored backend behind an
+    /// unreachable status (a capability or navigation failure after connect),
+    /// it is dropped so this attempt is real.
+    ///
+    /// Returns before the attempt has decided anything: resolution and connect
+    /// both run on the attempt thread and publish their result as a status.
     pub fn retry(&self, app: AppHandle) -> Result<(), String> {
         let mut inner = lock(&self.inner);
         if inner.shutdown {
@@ -228,40 +256,78 @@ impl BootManager {
                 inner = lock(&self.inner);
             }
         }
-        let config = match self.resolved.as_ref() {
-            Ok(Resolved::Configured { config, .. }) => config.clone(),
-            Ok(Resolved::NotConfigured) => {
-                crate::splash::dismiss(&app, "no Hermes is configured");
-                return Err("No Hermes is configured".to_owned());
-            }
-            Err(error) => {
-                crate::splash::dismiss(&app, error);
-                return Err(error.clone());
-            }
-        };
-        let attempt = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
-        inner.status = BootStatus::probing(None);
+        inner.status = start_status(self.payload.is_some());
         inner.cancel = hermes_sidecar::Cancel::new();
         inner.launching = false;
-        let (done_tx, done_rx) = mpsc::channel();
-        inner.attempt_done_rx = Some(done_rx);
         drop(inner);
 
         // A retry loads a fresh copy of the remote app, so the splash goes back
         // up before the attempt starts: the boot page must not be replaced by a
         // blank window while the app's bundle executes, exactly as on the first
         // start. Creating it before the attempt means a failure that follows
-        // can only dismiss a splash that exists.
+        // can only dismiss a splash that exists. The attempt resolves its own
+        // source and publishes a NoConfig/Unreachable status through
+        // `set_status` when it cannot run, which is what dismisses it again.
         if let Err(error) = crate::splash::create(&app) {
             log(&format!("Could not put the splash back: {error}"));
         }
 
+        self.spawn_attempt(app);
+        Ok(())
+    }
+
+    /// One connection attempt on its own thread: resolve the source first (a
+    /// first run unpacks the bundled payload), then connect. The thread signals
+    /// `attempt_done_rx` when it is done, which is what shutdown and a retry
+    /// wait for.
+    fn spawn_attempt(&self, app: AppHandle) {
+        let attempt = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let (done_tx, done_rx) = mpsc::channel();
+        lock(&self.inner).attempt_done_rx = Some(done_rx);
         let manager = self.clone();
         thread::spawn(move || {
-            manager.connect(app, attempt, config);
+            if let Some(config) = manager.resolve(&app) {
+                manager.connect(app, attempt, config);
+            }
             let _ = done_tx.send(());
         });
-        Ok(())
+    }
+
+    /// Works out where the backend comes from, installing the bundled payload
+    /// when this is a first run. Runs on the attempt thread, so unpacking (a
+    /// few seconds) never blocks setup or the webview. Returns the config to
+    /// connect with, or `None` after publishing the status that says why there
+    /// is nothing to connect.
+    fn resolve(&self, app: &AppHandle) -> Option<SidecarConfig> {
+        let resolved = match &*self.payload {
+            #[cfg(unix)]
+            Some(payload) => {
+                log("Preparing the bundled Hermes payload (a first run unpacks it)");
+                match payload::unpack(payload) {
+                    Ok(bundled) => config::load((*self.config_dir).clone(), Some(&bundled)),
+                    Err(error) => Err(error),
+                }
+            }
+            _ => config::load((*self.config_dir).clone(), None),
+        };
+        match resolved {
+            Ok(Resolved::Configured { config, source }) => {
+                log(&format!(
+                    "Hermes backend source: {}",
+                    config::source_label(&source)
+                ));
+                Some(config)
+            }
+            Ok(Resolved::NotConfigured) => {
+                self.set_status(app, BootStatus::no_config());
+                None
+            }
+            Err(error) => {
+                log(&format!("Could not configure Hermes: {error}"));
+                self.set_status(app, BootStatus::unreachable(None, error));
+                None
+            }
+        }
     }
 
     /// Applies a whitelisted deep-link route: immediately when the backend is
@@ -270,11 +336,10 @@ impl BootManager {
     /// `ready`, so a route seen while connecting is never stranded.
     pub fn apply_route_or_defer(&self, app: &AppHandle, route: &str) -> bool {
         let mut inner = lock(&self.inner);
-        // While the launch page may still hold the session token in its
-        // fragment, every route goes through the deferred path, which waits
-        // until the token is consumed. Applying one immediately would
-        // navigate away from the token-bearing launch page and lose the
-        // session (review F1).
+        // While the launch page may still hold the session token, every route
+        // goes through the deferred path, which waits until the token is
+        // consumed. Applying one immediately would navigate away from the
+        // token-bearing launch page and lose the session (review F1).
         if let Some(origin) = immediate_route_origin(inner.origin.as_deref(), inner.launching) {
             drop(inner);
             self.apply_route(app, &origin, route);
@@ -283,7 +348,7 @@ impl BootManager {
         if inner.shutdown {
             return false;
         }
-        inner.pending_route = Some(route.to_owned());
+        inner.pending_route = Some(deferred_route(inner.pending_route.as_deref(), route));
         false
     }
 
@@ -445,14 +510,17 @@ impl BootManager {
     /// Waits for the main webview to finish loading the launch URL, then
     /// applies the pending deep-link route.
     ///
-    /// Race-free because the route is only applied once the URL fragment no
-    /// longer carries `#hermes-session=`: the page's bootstrap consumes that
-    /// fragment into web-local storage and then strips it with
-    /// `history.replaceState` (`browser-launch-session.ts`), so a
-    /// fragment-free URL proves the token has already been read. The route is
-    /// a same-document hash change on top and cannot race the token read.
-    /// (Waiting for the origin alone was not enough: the navigation commits
-    /// before the page's scripts run.)
+    /// Race-free because the route is only applied once the launch URL no
+    /// longer carries a credential, whatever shape it had: the stock webapp
+    /// puts the session token in the `#hermes-session=` fragment and its
+    /// bootstrap stores it and strips the fragment with `history.replaceState`
+    /// (`browser-launch-session.ts`), while the bundled front door takes
+    /// `?token=` on `/`, answers it with a 303 to a clean `/` *and* the
+    /// session cookie (`hermes_plus/server/auth.py`), so a credential-free URL
+    /// proves the session is already established. The route is a same-document
+    /// hash change on top and cannot race that read. (Waiting for the origin
+    /// alone was not enough: the navigation commits before the page's scripts
+    /// run, and in bundled mode the origin alone never proved consumption.)
     fn apply_pending_route(self, app: AppHandle, origin: String) {
         let deadline = std::time::Instant::now() + PENDING_ROUTE_TIMEOUT;
         loop {
@@ -462,13 +530,7 @@ impl BootManager {
             let loaded = app
                 .get_webview_window("main")
                 .and_then(|window| window.url().ok())
-                .is_some_and(|url| {
-                    url.origin().ascii_serialization() == origin
-                        && !url
-                            .fragment()
-                            .unwrap_or_default()
-                            .contains("hermes-session=")
-                });
+                .is_some_and(|url| launch_consumed(&url, &origin));
             if loaded {
                 let mut inner = lock(&self.inner);
                 if inner.origin.as_deref() != Some(origin.as_str()) {
@@ -617,6 +679,18 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+/// The status an attempt starts from: `Preparing` while a bundled payload
+/// still has to be unpacked, otherwise the ordinary probe of the configured
+/// source (which the attempt thread resolves at once). Pure so it is testable
+/// without GTK.
+fn start_status(has_payload: bool) -> BootStatus {
+    if has_payload {
+        BootStatus::preparing()
+    } else {
+        BootStatus::probing(None)
+    }
+}
+
 /// Whether a deep-link route arriving now can be applied at once, and on
 /// which origin: only when the backend origin is known and the launch page
 /// has consumed its session token. Pure so it is testable without GTK.
@@ -627,11 +701,64 @@ fn immediate_route_origin(origin: Option<&str>, launching: bool) -> Option<Strin
     origin.map(str::to_owned)
 }
 
+/// Whether the webview has committed a launch URL that no longer carries a
+/// credential, i.e. whether the session is established and navigating away
+/// from the page cannot lose it.
+///
+/// Both credential shapes count: the stock webapp's `#hermes-session=<token>`
+/// fragment and the bundled front door's `?token=<token>` on `/`. The front
+/// door consumes the query by answering it with a 303 to `/` and the session
+/// cookie in the same response (`hermes_plus/server/auth.py`), so `true` here
+/// means the cookie is already stored — independent of what `get_uri()`
+/// reported while the redirect was in flight.
+///
+/// Known residual gap: with `auth = "password"` the front door serves a
+/// token-less `/login` and this predicate is true at once, so a deep link
+/// arriving then can preempt the login page (the route is lost, the session is
+/// not). The bundled payload defaults to `token` (`hermes_plus/server/settings.py`).
+fn launch_consumed(url: &Url, origin: &str) -> bool {
+    if url.origin().ascii_serialization() != origin {
+        return false;
+    }
+    if url
+        .fragment()
+        .unwrap_or_default()
+        .contains("hermes-session=")
+    {
+        return false;
+    }
+    // `token` as a whole parameter only: `xtoken=1` is a different parameter
+    // and must not keep the shell waiting.
+    !url.query()
+        .unwrap_or_default()
+        .split('&')
+        .any(|part| part == "token" || part.starts_with("token="))
+}
+
+/// The route to keep waiting for after `route` arrives while the launch page
+/// still holds the token. Only one route can wait, and the tray's "New chat"
+/// (`#/`) is the weaker request: it must not overwrite a deep link the user
+/// followed (review L1). Every other route replaces the waiting one, so the
+/// user's latest navigation wins.
+fn deferred_route(pending: Option<&str>, route: &str) -> String {
+    match pending {
+        Some(waiting) if route == Route::Home.hash() => waiting.to_owned(),
+        _ => route.to_owned(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{immediate_route_origin, BootPhase};
+    use super::{deferred_route, immediate_route_origin, launch_consumed, start_status, BootPhase};
+    use tauri::Url;
 
     const ORIGIN: &str = "http://127.0.0.1:18810";
+    /// A front-door token: 43 url-safe characters (`secrets.token_urlsafe(32)`).
+    const TOKEN: &str = "Yk3QpZ1sV0dJ7rNfT2xWcLmB6hGqAeUiO4yRtS8nZvP";
+
+    fn url(path: &str) -> Url {
+        Url::parse(&format!("{ORIGIN}{path}")).expect("test URL")
+    }
 
     #[test]
     fn a_route_is_immediate_only_after_the_token_is_consumed() {
@@ -651,13 +778,16 @@ mod tests {
     /// The splash is always on top, so it may only outlive the app's load while
     /// the shell is still trying. A failure phase leaves the main window
     /// showing the same boot page, and the phases in between are the ones the
-    /// splash exists to cover.
+    /// splash exists to cover: `Preparing` (a first run unpacking the bundled
+    /// payload) is one of them, and the 30 s cap only arms in `ready`, so a
+    /// long unpack keeps the splash without the cap firing.
     #[test]
     fn only_a_failure_phase_dismisses_the_splash() {
         for phase in [BootPhase::NoConfig, BootPhase::Unreachable] {
             assert!(phase.is_failure(), "{phase:?} must dismiss the splash");
         }
         for phase in [
+            BootPhase::Preparing,
             BootPhase::Probing,
             BootPhase::Starting,
             BootPhase::Waiting,
@@ -665,5 +795,74 @@ mod tests {
         ] {
             assert!(!phase.is_failure(), "{phase:?} must keep the splash");
         }
+    }
+
+    #[test]
+    fn a_launch_url_with_a_credential_is_not_consumed() {
+        // The front door's login URL: the token is still in the query, so the
+        // 303 (and with it the session cookie) has not happened yet.
+        assert!(!launch_consumed(&url(&format!("/?token={TOKEN}")), ORIGIN));
+        // The stock webapp's fragment shape, before `replaceState` strips it.
+        assert!(!launch_consumed(
+            &url(&format!("/#hermes-session={TOKEN}")),
+            ORIGIN
+        ));
+        // A bare `token` parameter counts as well.
+        assert!(!launch_consumed(&url("/?token"), ORIGIN));
+        // A parameter that merely ends in `token` does not.
+        assert!(launch_consumed(&url("/?xtoken=1"), ORIGIN));
+        // Nor does a token somewhere other than the query.
+        assert!(launch_consumed(&url("/?q=token"), ORIGIN));
+    }
+
+    #[test]
+    fn a_credential_free_launch_url_is_consumed() {
+        // The front door's post-303 URL and the SPA's own hash routes.
+        assert!(launch_consumed(&url("/"), ORIGIN));
+        assert!(launch_consumed(&url("/#/team"), ORIGIN));
+        assert!(launch_consumed(&url("/?a=1&b=2"), ORIGIN));
+        // Another origin is never the launch page, whatever it carries.
+        assert!(!launch_consumed(&url("/"), "http://127.0.0.1:18811"));
+    }
+
+    #[test]
+    fn a_route_arriving_before_the_front_door_consumed_the_token_is_deferred() {
+        // Regression for the M1/F1 race in bundled mode: the front door's URL
+        // is `/?token=<43>` while the redirect is in flight. The watcher's
+        // predicate is false there, so it never clears `launching`, so a deep
+        // link arriving in that window takes the deferred path instead of
+        // navigating away from the token-bearing page.
+        let login = url(&format!("/?token={TOKEN}"));
+        assert!(!launch_consumed(&login, ORIGIN));
+        assert_eq!(immediate_route_origin(Some(ORIGIN), true), None);
+
+        // Once the 303 has been followed the same URL is credential-free and
+        // the deferred route is applied.
+        let consumed = url("/");
+        assert!(launch_consumed(&consumed, ORIGIN));
+        assert_eq!(
+            immediate_route_origin(Some(ORIGIN), false),
+            Some(ORIGIN.to_owned())
+        );
+    }
+
+    #[test]
+    fn the_tray_home_route_does_not_overwrite_a_waiting_deep_link() {
+        // A deep link that arrived while the backend was still starting stays
+        // the pending route when the tray's New chat asks for `#/` (review L1).
+        assert_eq!(deferred_route(Some("#/team"), "#/"), "#/team");
+        assert_eq!(deferred_route(Some("#/studio"), "#/"), "#/studio");
+        // `#/` on its own still waits, and a later link still wins.
+        assert_eq!(deferred_route(None, "#/"), "#/");
+        assert_eq!(deferred_route(Some("#/team"), "#/studio"), "#/studio");
+        assert_eq!(deferred_route(Some("#/"), "#/team"), "#/team");
+    }
+
+    #[test]
+    fn a_payload_build_starts_on_the_preparing_phase() {
+        // The unpack happens before any connection attempt, so the boot page
+        // must say "preparing" rather than "probing".
+        assert_eq!(start_status(true).phase, BootPhase::Preparing);
+        assert_eq!(start_status(false).phase, BootPhase::Probing);
     }
 }

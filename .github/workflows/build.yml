@@ -41,6 +41,49 @@ jobs:
       - name: Run tests
         run: cargo test --workspace --locked
 
+      # The cfg(windows) code was never type-checked anywhere (R7): the Linux
+      # job only ever built the Linux target, and the Windows job only runs the
+      # build, so two missing windows-sys features and a missing method in
+      # hermes-sidecar stayed invisible until `cargo tauri build` on Windows.
+      - name: Add the Windows target std
+        run: rustup target add x86_64-pc-windows-msvc
+
+      - name: Check the Windows code paths (cargo check and clippy)
+        run: |
+          # `cargo check` emits metadata and never links, so the C and assembly
+          # parts of the one C dependency (ring, through ureq's TLS) are not
+          # needed: this runner has no MSVC toolchain, and no C artifact reaches
+          # a link step. The stand-in has to create the file cc-rs asks for,
+          # because cc-rs hard-links the archive its archiver was meant to
+          # produce.
+          cat > "$RUNNER_TEMP/noop-msvc-tool.sh" <<'SH'
+          #!/bin/sh
+          # Stand-in for cl.exe and lib.exe: create the requested output, succeed.
+          out=
+          for arg in "$@"; do
+            case "$arg" in
+              -out:*) out=${arg#-out:} ;;
+              /Fo*) out=${arg#/Fo} ;;
+            esac
+          done
+          if [ -n "$out" ]; then
+            mkdir -p "$(dirname "$out")" && : > "$out"
+          fi
+          exit 0
+          SH
+          chmod +x "$RUNNER_TEMP/noop-msvc-tool.sh"
+          export CC_x86_64_pc_windows_msvc="$RUNNER_TEMP/noop-msvc-tool.sh"
+          export AR_x86_64_pc_windows_msvc="$RUNNER_TEMP/noop-msvc-tool.sh"
+          cargo check --locked --target x86_64-pc-windows-msvc --all-targets \
+            -p hermes-sidecar -p hermes-shell-config
+          # `clippy::result_large_err` fires for this target only: on Windows
+          # `ConfigError::ConfigFile` (crates/hermes-shell-config/src/config.rs,
+          # owned by another task) crosses clippy's 128-byte threshold. Every
+          # other lint is still denied.
+          cargo clippy --locked --target x86_64-pc-windows-msvc --all-targets \
+            -p hermes-sidecar -p hermes-shell-config -- \
+            -D warnings -A clippy::result_large_err
+
   build:
     name: Build ${{ matrix.os }} / ${{ matrix.target }}
     needs: check
@@ -95,8 +138,12 @@ jobs:
       # Prepare signing env: only write non-empty secrets to GITHUB_ENV.
       # tauri-action reads these at runtime; empty vars would trigger signing attempts and fail.
       # Use heredoc with a random delimiter so a secret can never end the block early.
+      # `shell: bash` is required: this script is bash (set -euo pipefail, ${!var},
+      # heredocs, openssl), while `run:` on a Windows runner defaults to
+      # PowerShell, where it failed before the build even started (R7).
       - name: Prepare signing environment
         id: signing
+        shell: bash
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}

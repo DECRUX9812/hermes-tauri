@@ -210,6 +210,12 @@ first-run-after-extract-and-run (`--appimage-extract-and-run`, no-FUSE hosts) as
 Whether Tauri's resource copying preserves the launcher's executable bit on each platform is **not
 verified**.
 
+**Superseded:** running in place under `$RESOURCE` does not work. Tauri's resource copy dereferences
+symlinks, and the payload's `venv/bin/python` symlink is what makes the venv find its stdlib, so the
+copied payload dies with `Fatal Python error: Failed to import encodings module` (T16a, run A); with
+the payload's two symlinks-to-directories staged, the bundler refuses to copy the tree at all. The
+payload therefore ships as one archive and is unpacked on first run — see §5.8.
+
 ### 5.3 macOS signing
 
 The payload contains many Mach-O files (the CPython binary, `lib-dynload/*.so`, and third-party
@@ -267,6 +273,65 @@ Support`, `%APPDATA%`), which the shell points at via `HERMES_HOME`. The backend
 that home exactly as it does today, so app/payload updates replace only the immutable payload and
 never wipe user plugins (see also the plan's "Python plugins are unaffected"). The shell must never
 write into `$RESOURCE`.
+
+### 5.8 Archive + first-run unpack (T16b)
+
+The payload ships as **one archive plus a manifest** in the resource dir, and the shell unpacks it into
+the app-data dir on first run:
+
+```json
+"bundle": { "resources": { "payload/hermes-payload.tar.zst": "hermes-payload.tar.zst",
+                           "payload/payload-manifest.json": "payload-manifest.json" } }
+```
+
+`scripts/pack-payload.sh` writes both into `src-tauri/payload/` (gitignored). The tar stream keeps the
+payload's relative symlinks, which is the whole point: a resource copy dereferences `venv/bin/python`
+and the venv then dies with `Fatal Python error: Failed to import encodings module` (T16a, run A). The
+archive is deterministic (names sorted, every mtime the epoch, numeric owner 0, no build path in any
+name — packing the same tree twice gives byte-identical output, on the host and in the builder), and
+the script refuses to pack a tree whose `*.pyc` files embed the build path (68 of 68 today; rebuild
+with `scripts/build-python-payload.sh`, or pass `--allow-build-paths` for a local experiment only).
+`payload-manifest.json` is `{ version, sha256, archive_bytes, unpacked_bytes, files }`, where `version`
+is the payload's own `hermes-payload/MANIFEST` `built` field (`2026-10-15T07-23-19Z`), sanitised into
+one directory name.
+
+`hermes-shell-config::ensure_unpacked(archive, manifest, data_dir)` installs it, and only ever writes
+inside `<data_dir>/payload`:
+
+```
+<data_dir>/payload/.lock             exclusive install lock (a second shell blocks, then sees .ready)
+<data_dir>/payload/<version>/        the unpacked payload (hermes-payload/ + python/)
+<data_dir>/payload/<version>/.ready  the archive sha256 it was unpacked from
+<data_dir>/hermes                    HERMES_HOME         (T15 bundled_env — never touched here)
+<data_dir>/runtime                   HERMES_RUNTIME_DIR  (T15 bundled_env — never touched here)
+```
+
+It returns at once when `.ready` names the manifest's sha256. Otherwise it verifies the archive hash
+*before* writing anything, unpacks into `<version>.tmp-<pid>` refusing absolute paths, `..`
+components, hard links and symlinks that leave the destination (every symlink in the payload itself
+stays inside), keeps the exec bits, renames the staging dir into place, writes `.ready` atomically, and
+only then prunes stale staging dirs and older versions. The returned `Bundled` is what T15's
+`resolve_with_bundled` takes.
+
+Measured on the real 341 MB payload (T16b, inside `hermes-tauri-builder:26.04`):
+
+| | |
+|---|---|
+| archive | 88,407,662 B (84.3 MiB), zstd level 19 with 4 workers, 52-53 s to pack |
+| archive entries | 13,708 (11,762 files, 1,053 symlinks, 893 directories) |
+| cold unpack | 13.7 s (327.0 MiB written into the app-data dir) |
+| second call (`.ready`) | < 1 ms |
+| boot to `/healthz` = 200 | 14.4 s (T15 measured 16.1 s, T10 16-20 s) |
+
+**Use `ready_timeout >= 90 s` for the first run.** It pays the unpack (14 s here) *plus* the cold start
+(14-53 s measured, 46-47 s while the machine was busy), and the sidecar's 60 s default does not cover
+both.
+
+**T16 still has to wire it:** read the resource dir and the app-data dir from the Tauri app handle,
+call `ensure_unpacked` with `<resource>/hermes-payload.tar.zst` and
+`<resource>/payload-manifest.json` *before* `resolve_with_bundled`, pass the returned `Bundled`, and
+show `InstallError` on the boot page. `crates/hermes-shell-config/src/payload_install.rs` is Unix-only,
+like the payload's launcher, so the Windows path stays `cfg`-gated (§5.4).
 
 ## 6. Status of claims
 
