@@ -289,8 +289,13 @@ payload's relative symlinks, which is the whole point: a resource copy dereferen
 and the venv then dies with `Fatal Python error: Failed to import encodings module` (T16a, run A). The
 archive is deterministic (names sorted, every mtime the epoch, numeric owner 0, no build path in any
 name — packing the same tree twice gives byte-identical output, on the host and in the builder), and
-the script refuses to pack a tree whose `*.pyc` files embed the build path (68 of 68 today; rebuild
-with `scripts/build-python-payload.sh`, or pass `--allow-build-paths` for a local experiment only).
+the script refuses to pack a tree whose `*.pyc` files embed the build path. A payload freshly built by
+`scripts/build-python-payload.sh` passes that gate (its build exports `PYTHONDONTWRITEBYTECODE=1` and
+its last step strips every `__pycache__`, so it holds no `.pyc` at all): the build-path `.pyc` this
+host once carried were written *at runtime*, by boots of the payload in place before the shell's
+`PYTHONDONTWRITEBYTECODE` spawn env existed (T10's measurement runs; T21 confirmed that one un-scrubbed
+import writes `.pyc` embedding the run path, while the shell's own env writes none). Never pack a tree
+that ran in place — rebuild it first, or pass `--allow-build-paths` for a local experiment only.
 `payload-manifest.json` is `{ version, sha256, archive_bytes, unpacked_bytes, files }`, where `version`
 is the payload's own `hermes-payload/MANIFEST` `built` field (`2026-10-15T07-23-19Z`), sanitised into
 one directory name.
@@ -352,14 +357,19 @@ The shell installs and spawns the payload itself, and never on the thread that d
 falls back silently to `HERMES_TAURI_URL`/`HERMES_TAURI_CMD`/`config.toml`/PATH: one binary serves both
 bundles.
 
+Release procedure: build the payload into its own directory, pack it WITHOUT `--allow-build-paths`
+(the pack gate then also proves the tree carries no build path), and bundle:
+
 ```sh
-scripts/pack-payload.sh
+HERMES_TAURI_PAYLOAD_DIR=$HOME/.cache/hermes-tauri/payload-clean \
+  scripts/build-python-payload.sh
+scripts/pack-payload.sh --payload "$HOME/.cache/hermes-tauri/payload-clean" --out src-tauri/payload
 scripts/builder.sh bash -c 'cd src-tauri && cargo tauri build --bundles deb,appimage --config tauri.payload.conf.json'
 ```
 
-`--allow-build-paths` is no longer needed: it existed because the payload had been built in place, so
-its `*.pyc` embedded the build path. A payload built with `scripts/build-python-payload.sh` sets
-`PYTHONDONTWRITEBYTECODE=1` and strips `__pycache__` (§5.8), and the refreshed archive carries **no**
+A fresh build passes the pack gate with no flag (§5.8); `--allow-build-paths` is for local
+experiments only, never a shipped artefact. It was needed while the payload had been booted in place,
+because those boots wrote `*.pyc` embedding the build path; a payload built as above carries **no**
 `*.pyc` at all, so `pack-payload.sh` passes its own check with no flag (a flag-free repack reproduces
 the identical sha256).
 
