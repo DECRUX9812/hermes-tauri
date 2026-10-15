@@ -31,6 +31,48 @@ Forked renderers keep their zygote's command line, so "zygote" includes renderer
 
 Run-to-run spread on idle RAM is about 5% (414.3 vs 436.8 MiB). Treat differences under that as noise.
 
+## Startup profile (T12)
+
+The startup figure above is *first contentful paint*, and for both shells that content is the **remote
+Hermes web app** served by the test backend, not a local shell page. Measured back to back on the same
+minute (both shells under `dbus-run-session --`, launch link via `HERMES_TAURI_URL`, fresh dir per run, load
+recorded; no build lock, which was held by other jobs):
+
+| set | runs (ms) | median (ms) | load before -> after |
+|---|---|---|---|
+| Tauri (T1 binary) | 6944.1, 10021.5, 9543.8 | 9543.8 | 5.76 -> 8.18 |
+| Electron (v0.17.0) | 5929.7, 2995.5, 3244.1 | 3244.1 | 8.18 -> 11.07 |
+
+Median ratio 2.94x. The cost is **not** shell startup: instrumenting map time versus paint time shows the
+Tauri window maps in ~0.46 s but stays a single flat colour until ~6.2 s with the launch URL, whereas with
+**no** launch URL (local splash only) the same binary paints at **1.75 s** (runs 1862.5, 870.1, 1750.2). The
+shell navigates the webview to the remote app (`src-tauri/src/connect.rs:177`) before the local splash has
+painted, so the first frame anyone sees is the remote app. `WebKitWebProcess` is CPU-saturated (~1 core) for
+that whole gap; an `strace -f -tt -T` of one cold start found no syscall gap over 386 ms. DRI3 fails under
+Xvfb so Mesa renders with llvmpipe, and the shell forces `WEBKIT_DISABLE_DMABUF_RENDERER=1`; the numbers are
+software-rendered.
+
+Per-fix medians (3 cold runs each, launch URL, fresh dirs; load average rose 6.3 -> 14.6 through the matrix,
+and the spread tracks the load, not the variable):
+
+| variable tried | paint median (ms) | load |
+|---|---|---|
+| baseline (nothing extra) | 6110.5 | 6.30 |
+| `NO_AT_BRIDGE=1` | 5437.7 | 7.54 |
+| `GTK_A11Y=none` | 5256.8 | 9.18 |
+| `GDK_DEBUG=` (empty) | 6818.7 | 9.29 |
+| `GIO_USE_VFS=local` | 6402.4 | 11.87 |
+| `GTK_USE_PORTAL=0` | 5701.3 | 14.63 |
+| (exploratory) `WEBKIT_DISABLE_COMPOSITING_MODE=1` | 5982.5 | 12.22 |
+| pre-warmed fontconfig cache (dir not wiped) | 6160.7 | ~10 |
+
+None of these changed first paint outside noise (all 5.2-6.8 s), the two "best" values ran at the lowest
+load and the "worst" at a higher load, and the app wrote no fontconfig cache into `XDG_CACHE_HOME/fontconfig`
+at all (only `mesa_shader_cache`). With the harness's fresh-dir wipe disabled entirely the Tauri median was
+4442 ms (runs 4442, 1688, 6155) — high variance, and the 1688 ms run shows the first frame is a race between
+the local splash and the remote app depending on which composites first. See `.oc/reports/T12.md` for the
+full profile, fix matrix and harness change.
+
 ## Method
 
 - **Size**: a walk with `lstat`, no symlinks followed. Apparent size is the sum of `st_size`; on-disk size
@@ -47,7 +89,9 @@ Run-to-run spread on idle RAM is about 5% (414.3 vs 436.8 MiB). Treat difference
 - **Startup**: the clock starts when the command's pid is written, just before `exec`. It stops at the
   first visible window at least 200x200 px whose 32x20 sample grid of its XWD capture holds two or more
   colours. The user-data directory is wiped before each run. This measures first paint, not the moment
-  the UI finished loading data.
+  the UI finished loading data. If the command is a wrapper that forks the X11 client (e.g.
+  `dbus-run-session --`, which the T12 runs use), the window is found by searching the wrapper's process
+  tree, because the wrapper's pid is not the window's `_NET_WM_PID`.
 - **Environment for attach mode**: the command gets exactly the variables in an env file (mode 600,
   never printed): a throwaway `HOME` and `XDG_*` under `/tmp`, `HERMES_HOME` pointing at the test Hermes
   state, `HERMES_DESKTOP_USER_DATA_DIR`, `HERMES_DESKTOP_REMOTE_URL` and `HERMES_DESKTOP_REMOTE_TOKEN`
@@ -92,6 +136,9 @@ distort the numbers. `<env>` holds the launch link and must not be printed or co
 - Electron 40.10.2 (`linux-unpacked`, app v0.17.0, August build); backend v0.22.0 as shown in the UI
 - WebKitGTK 2.52.6 (`libwebkit2gtk-4.1-0` 2.52.6-0ubuntu0.26.04.1)
 - The machine was shared: other sessions' browsers and X servers were running during the runs.
+- Software rendering only: under Xvfb, WebKit's EGL reports `DRI3 error` and falls back to llvmpipe; the
+  measured shells are not GPU-accelerated even though AMD GPUs are present. `kernel.perf_event_paranoid=4`
+  and `kernel.yama.ptrace_scope=1` on this host block `perf` and `gdb` attach.
 
 ## Tauri
 
@@ -128,9 +175,14 @@ scripts/measure.sh startup --label tauri-t1-attach \
 
 ## Caveats
 
-- Startup is first paint, not data loaded (see Method).
-- The Electron and Tauri columns were measured about three hours apart, and the Tauri runs overlapped heavy builds from other jobs
-  on the same machine. Treat the startup ratio as provisional until both shells are measured back to back.
+- Startup is first paint, not data loaded (see Method). For both shells the first painted content is the
+  remote Hermes web app, so the ratio mixes shell overhead with web-engine rendering (WebKitGTK here vs
+  Chromium). Shell-to-local-splash is ~1.7 s for Tauri with no launch URL; shell-to-remote-UI is the figure
+  in the table and in the Startup profile section.
+- The Electron and Tauri columns were measured about three hours apart, and the Tauri runs overlapped heavy
+  builds from other jobs on the same machine. The back-to-back runs in the Startup profile section
+  (Tauri 9543.8 ms vs Electron 3244.1 ms) confirm the ~2.8-2.9x ratio under one load window; the absolute
+  numbers are still affected by the shared machine (load 6-14 on 8 CPUs).
 - RAM after the click covers the Messaging page for Electron (`68,100`), whereas for Tauri it navigates to the Team page `#/team` (`16,370`) via the activity rail.
 - Attach mode spawned no backend in any run, so the backend column is 0. The pattern is a guard, not a
   measurement of backend cost; the backend is the same for both shells.
