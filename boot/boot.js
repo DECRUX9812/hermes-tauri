@@ -17,6 +17,12 @@
           'Pass --url or set HERMES_TAURI_URL to attach to a running server, ' +
           'or set HERMES_TAURI_CMD or a config.toml to start one.';
         return;
+      case 'preparing':
+        // The bundled payload's first run: unpacking takes seconds, and the
+        // window must say so instead of staying blank.
+        headline.textContent = 'Preparing Hermes (first run)…';
+        detail.textContent = 'Unpacking the bundled Hermes payload. This happens once.';
+        return;
       case 'probing':
         headline.textContent = 'Connecting to Hermes…';
         detail.textContent = state.origin
