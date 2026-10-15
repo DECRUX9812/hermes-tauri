@@ -170,13 +170,16 @@ pub fn toggle_window(app: &AppHandle) {
 }
 
 /// "New chat": the UI's own new-session action ends on the `#/` hash route,
-/// so the tray item navigates the main webview there.
+/// so the tray item navigates the main webview there. Through the deferred
+/// path, so a click while the launch page still holds the session token
+/// cannot strip it (review N1).
 fn new_chat(app: &AppHandle) {
-    let Some(origin) = app.state::<BootManager>().origin() else {
+    let manager = app.state::<BootManager>();
+    if manager.origin().is_none() {
         log("Ignored New chat: Hermes is not connected yet");
         return;
-    };
-    app.state::<BootManager>().apply_route(app, &origin, "#/");
+    }
+    manager.apply_route_or_defer(app, "#/");
 }
 
 /// Adds the "Install update and restart" item once an update is found.

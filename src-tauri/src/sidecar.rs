@@ -191,6 +191,11 @@ impl BootManager {
             }
         }
         let mut inner = lock(&self.inner);
+        // Quit may have raced the wait above: never spawn a fresh attempt
+        // during shutdown, or its child could survive the exit (review N3).
+        if inner.shutdown {
+            return Err("The shell is shutting down".to_owned());
+        }
         if inner.backend.is_some() {
             if inner.status.phase != BootPhase::Unreachable {
                 return Ok(());
@@ -394,10 +399,11 @@ impl BootManager {
 
         // Watch the launch page until the token is consumed, then apply a
         // deep link seen in the meantime (F1). Always spawned, so `launching`
-        // is cleared even when no route is pending.
-        let pending = lock(&self.inner).pending_route.take();
+        // is cleared even when no route is pending. The route is drained
+        // under the lock at consumption time, not captured here, so a link
+        // arriving after the spawn is not stranded (review N2).
         let manager = self.clone();
-        thread::spawn(move || manager.apply_pending_route(app, origin, pending));
+        thread::spawn(move || manager.apply_pending_route(app, origin));
     }
 
     /// Waits for the main webview to finish loading the launch URL, then
@@ -411,7 +417,7 @@ impl BootManager {
     /// a same-document hash change on top and cannot race the token read.
     /// (Waiting for the origin alone was not enough: the navigation commits
     /// before the page's scripts run.)
-    fn apply_pending_route(self, app: AppHandle, origin: String, route: Option<String>) {
+    fn apply_pending_route(self, app: AppHandle, origin: String) {
         let deadline = std::time::Instant::now() + PENDING_ROUTE_TIMEOUT;
         loop {
             if self.is_shutting_down() {
@@ -430,13 +436,16 @@ impl BootManager {
             if loaded {
                 let mut inner = lock(&self.inner);
                 if inner.origin.as_deref() != Some(origin.as_str()) {
-                    // A superseded attempt's watcher: leave `launching` to
-                    // the current attempt.
+                    // A superseded attempt's watcher: leave `launching` and
+                    // the pending route to the current attempt.
                     return;
                 }
                 inner.launching = false;
+                // Drain under the lock: a link may have arrived after this
+                // watcher was spawned (review N2).
+                let route = inner.pending_route.take();
+                drop(inner);
                 if let Some(route) = route {
-                    drop(inner);
                     self.apply_route(&app, &origin, &route);
                 }
                 return;
@@ -446,6 +455,7 @@ impl BootManager {
                 if inner.origin.as_deref() == Some(origin.as_str()) {
                     inner.launching = false;
                 }
+                let route = inner.pending_route.take();
                 drop(inner);
                 if route.is_some() {
                     log("Ignored a deep link: Hermes did not finish loading within 30 s");

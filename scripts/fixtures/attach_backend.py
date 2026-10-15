@@ -7,7 +7,7 @@ import argparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-PAGE = b"""<!doctype html>
+PAGE = """<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -120,7 +120,7 @@ class FixtureHandler(BaseHTTPRequestHandler):
             body = b'{"status":"ok","fixture":true}'
             content_type = "application/json"
         elif self.path.startswith("/"):
-            body = PAGE
+            body = PAGE.encode("utf-8")
             content_type = "text/html; charset=utf-8"
         else:
             self.send_error(404)

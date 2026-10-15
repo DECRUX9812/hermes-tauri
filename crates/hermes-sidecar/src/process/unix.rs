@@ -46,7 +46,8 @@ impl ProcessGroup {
     /// A zombie member has exited and holds no resources; it only waits for
     /// whoever reparented to reap it, which in a container without an init
     /// may never happen. Waiting on zombies would report `StillRunning`
-    /// forever, so shutdown considers them gone.
+    /// forever, so shutdown considers them gone. Without a /proc (macOS) this
+    /// falls back to `has_members`, which counts zombies as present.
     pub(crate) fn has_live_members(&self) -> bool {
         let entries = match fs::read_dir("/proc") {
             Ok(entries) => entries,
@@ -71,7 +72,7 @@ impl ProcessGroup {
                 (Some(state), Some(pgrp)) => (state, pgrp),
                 _ => continue,
             };
-            if pgrp == self.pgid.to_string() && !state.starts_with(['Z', 'X']) {
+            if pgrp == self.pgid.to_string() && !state.starts_with(['Z', 'X', 'x']) {
                 return true;
             }
         }
