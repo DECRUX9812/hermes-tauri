@@ -11,6 +11,12 @@ on:
   pull_request:
   workflow_dispatch:
 
+# One run per ref: supersede an in-flight run only for pull requests, so a
+# master push or a tagged release build is never cancelled mid-flight.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   check:
     name: Check (fmt, clippy, test)
