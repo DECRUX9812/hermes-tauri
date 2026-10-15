@@ -35,10 +35,10 @@ Behaviour that is only exercised on other systems, or under a real desktop sessi
 below. The known cross-cutting limitations are collected in the [README](../README.md#known-limitations).
 
 #### Written but not run (CI Matrix)
-- **CI Runner**: `ubuntu-22.04` ([build.yml:52](../.github/workflows/build.yml#L52))
-- **Target Triple**: `x86_64-unknown-linux-gnu` ([build.yml:53](../.github/workflows/build.yml#L53))
-- **Bundles Configured**: `deb,appimage,rpm` ([build.yml:54](../.github/workflows/build.yml#L54))
-- **Artifact Upload**: Uploaded as `bundle-x86_64-unknown-linux-gnu` ([build.yml:161](../.github/workflows/build.yml#L161)) containing `.deb`, `.rpm`, `.AppImage`, and conditional `.AppImage.sig` ([build.yml:165-168](../.github/workflows/build.yml#L165-L168)).
+- **CI Runner**: `ubuntu-22.04` ([build.yml:95](../.github/workflows/build.yml#L95))
+- **Target Triple**: `x86_64-unknown-linux-gnu` ([build.yml:96](../.github/workflows/build.yml#L96))
+- **Bundles Configured**: `deb,appimage,rpm` ([build.yml:97](../.github/workflows/build.yml#L97))
+- **Artifact Upload**: Uploaded as `bundle-x86_64-unknown-linux-gnu` ([build.yml:208](../.github/workflows/build.yml#L208)) containing `.deb`, `.rpm`, `.AppImage`, and conditional `.AppImage.sig` ([build.yml:212-215](../.github/workflows/build.yml#L212-L215)).
 - **Code Quality**: Verified in the `check` job via `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, and `cargo test --workspace` ([build.yml:37-42](../.github/workflows/build.yml#L37-L42)).
 
 #### What is left
@@ -56,10 +56,10 @@ below. The known cross-cutting limitations are collected in the [README](../READ
 nothing verified yet
 
 #### Written but not run (CI Matrix)
-- **CI Runner**: `ubuntu-22.04-arm` ([build.yml:55](../.github/workflows/build.yml#L55))
-- **Target Triple**: `aarch64-unknown-linux-gnu` ([build.yml:56](../.github/workflows/build.yml#L56))
-- **Bundles Configured**: `deb,appimage` ([build.yml:57](../.github/workflows/build.yml#L57))
-- **Artifact Upload**: Uploaded as `bundle-aarch64-unknown-linux-gnu` ([build.yml:161](../.github/workflows/build.yml#L161)) containing `.deb`, `.AppImage`, and conditional `.AppImage.sig` ([build.yml:165,167-168](../.github/workflows/build.yml#L165-L168)). (RPM is not configured for ARM64).
+- **CI Runner**: `ubuntu-22.04-arm` ([build.yml:98](../.github/workflows/build.yml#L98))
+- **Target Triple**: `aarch64-unknown-linux-gnu` ([build.yml:99](../.github/workflows/build.yml#L99))
+- **Bundles Configured**: `deb,appimage` ([build.yml:100](../.github/workflows/build.yml#L100))
+- **Artifact Upload**: Uploaded as `bundle-aarch64-unknown-linux-gnu` ([build.yml:208](../.github/workflows/build.yml#L208)) containing `.deb`, `.AppImage`, and conditional `.AppImage.sig` ([build.yml:212,214-215](../.github/workflows/build.yml#L212-L215)). (RPM is not configured for ARM64).
 
 #### What is left
 1. Execute the GitHub Actions workflow on an actual `ubuntu-22.04-arm` runner to verify compilation and packaging of WebKitGTK dependencies on ARM64.
@@ -75,10 +75,10 @@ nothing verified yet
 nothing verified yet
 
 #### Written but not run (CI Matrix)
-- **CI Runner**: `macos-14` (Apple Silicon M1 runner) ([build.yml:58](../.github/workflows/build.yml#L58))
-- **Target Triple**: `aarch64-apple-darwin` ([build.yml:59](../.github/workflows/build.yml#L59))
-- **Bundles Configured**: `app,dmg` ([build.yml:60](../.github/workflows/build.yml#L60))
-- **Artifact Upload**: Uploaded as `bundle-aarch64-apple-darwin` ([build.yml:161](../.github/workflows/build.yml#L161)) containing `.dmg`, `.app.tar.gz`, and conditional `.app.tar.gz.sig` ([build.yml:169-171](../.github/workflows/build.yml#L169-L171)).
+- **CI Runner**: `macos-14` (Apple Silicon M1 runner) ([build.yml:101](../.github/workflows/build.yml#L101))
+- **Target Triple**: `aarch64-apple-darwin` ([build.yml:102](../.github/workflows/build.yml#L102))
+- **Bundles Configured**: `app,dmg` ([build.yml:103](../.github/workflows/build.yml#L103))
+- **Artifact Upload**: Uploaded as `bundle-aarch64-apple-darwin` ([build.yml:208](../.github/workflows/build.yml#L208)) containing `.dmg`, `.app.tar.gz`, and conditional `.app.tar.gz.sig` ([build.yml:216-218](../.github/workflows/build.yml#L216-L218)).
 - **Staging Handling**: `scripts/ci/stage-release.sh` renames the updater archive deterministically to `Hermes-Tauri_${VERSION}_aarch64.app.tar.gz` and `.sig` to avoid collision with x64 ([stage-release.sh:115](../scripts/ci/stage-release.sh#L115)).
 
 #### What is left
@@ -96,10 +96,10 @@ nothing verified yet
 nothing verified yet
 
 #### Written but not run (CI Matrix)
-- **CI Runner**: `macos-14` (cross-compiling on Apple Silicon runner) ([build.yml:61](../.github/workflows/build.yml#L61))
-- **Target Triple**: `x86_64-apple-darwin` ([build.yml:62](../.github/workflows/build.yml#L62))
-- **Bundles Configured**: `app,dmg` ([build.yml:63](../.github/workflows/build.yml#L63))
-- **Artifact Upload**: Uploaded as `bundle-x86_64-apple-darwin` ([build.yml:161](../.github/workflows/build.yml#L161)) containing `.dmg`, `.app.tar.gz`, and conditional `.app.tar.gz.sig` ([build.yml:169-171](../.github/workflows/build.yml#L169-L171)).
+- **CI Runner**: `macos-14` (cross-compiling on Apple Silicon runner) ([build.yml:104](../.github/workflows/build.yml#L104))
+- **Target Triple**: `x86_64-apple-darwin` ([build.yml:105](../.github/workflows/build.yml#L105))
+- **Bundles Configured**: `app,dmg` ([build.yml:106](../.github/workflows/build.yml#L106))
+- **Artifact Upload**: Uploaded as `bundle-x86_64-apple-darwin` ([build.yml:208](../.github/workflows/build.yml#L208)) containing `.dmg`, `.app.tar.gz`, and conditional `.app.tar.gz.sig` ([build.yml:216-218](../.github/workflows/build.yml#L216-L218)).
 - **Staging Handling**: `scripts/ci/stage-release.sh` renames the updater archive deterministically to `Hermes-Tauri_${VERSION}_x86_64.app.tar.gz` and `.sig` to avoid collision with arm64 ([stage-release.sh:115](../scripts/ci/stage-release.sh#L115)).
 
 #### What is left
@@ -116,18 +116,32 @@ nothing verified yet
 nothing verified yet
 
 #### Written but not run (CI Matrix)
-- **CI Runner**: `windows-latest` ([build.yml:64](../.github/workflows/build.yml#L64))
-- **Target Triple**: `x86_64-pc-windows-msvc` ([build.yml:65](../.github/workflows/build.yml#L65))
-- **Bundles Configured**: `nsis,msi` ([build.yml:66](../.github/workflows/build.yml#L66))
-- **Artifact Upload**: Uploaded as `bundle-x86_64-pc-windows-msvc` ([build.yml:161](../.github/workflows/build.yml#L161)) containing `*-setup.exe`, `*-setup.exe.sig` (conditional), `*.msi`, and `*.msi.sig` (conditional) ([build.yml:172-175](../.github/workflows/build.yml#L172-L175)).
-- **Code Signing**: Currently commented out in [build.yml:107-109](../.github/workflows/build.yml#L107-L109). Builds run unsigned by default.
+- **CI Runner**: `windows-latest` ([build.yml:107](../.github/workflows/build.yml#L107))
+- **Target Triple**: `x86_64-pc-windows-msvc` ([build.yml:108](../.github/workflows/build.yml#L108))
+- **Bundles Configured**: `nsis,msi` ([build.yml:109](../.github/workflows/build.yml#L109))
+- **Artifact Upload**: Uploaded as `bundle-x86_64-pc-windows-msvc` ([build.yml:208](../.github/workflows/build.yml#L208)) containing `*-setup.exe`, `*-setup.exe.sig` (conditional), `*.msi`, and `*.msi.sig` (conditional) ([build.yml:219-222](../.github/workflows/build.yml#L219-L222)).
+- **Code Signing**: Currently commented out in [build.yml:154-156](../.github/workflows/build.yml#L154-L156). Builds run unsigned by default.
+- **Code Quality**: The Linux `check` job installs the Windows target and runs `cargo check --all-targets` and `cargo clippy --all-targets` for `hermes-sidecar` and `hermes-shell-config` ([build.yml:48-85](../.github/workflows/build.yml#L48-L85)), so Windows-only code fails CI instead of waiting for this runner. `clippy::result_large_err` is the one lint allowed there, and only there: it fires on Windows for a pre-existing `ConfigError` variant in `hermes-shell-config`.
+
+#### Fixed since the R7 audit (compile-checked, never run)
+The R7 audit found that no `cfg(windows)` code had ever been compiled. These are fixed; all of them are type-checked for `x86_64-pc-windows-msvc` and none has been executed:
+- `crates/hermes-sidecar/Cargo.toml` enables the two `windows-sys` features the Job Object code needs: `Win32_Security` for `CreateJobObjectW` (its signature takes `SECURITY_ATTRIBUTES`) and `Win32_System_Threading` for `JOBOBJECT_EXTENDED_LIMIT_INFORMATION` (it embeds `IO_COUNTERS`).
+- `ProcessGroup::has_live_members` exists on Windows ([process/windows.rs](../crates/hermes-sidecar/src/process/windows.rs)), so the shutdown wait in `backend.rs` compiles there.
+- A `.cmd`/`.bat` backend is now run through `cmd.exe` with a command line the shell builds itself ([src/batch.rs](../crates/hermes-sidecar/src/batch.rs), unit-tested on Linux). `CreateProcessW` cannot start a batch file, and Rust's `Command` only manages it through an undocumented `CreateProcessW` feature that the standard library documents as something that "may be removed in the future" (`std::process`, "Batch file special handling"). This is the path the `hermes.cmd` entry in `EXECUTABLE_NAMES` takes.
+- The "Prepare signing environment" step of the build workflow sets `shell: bash`; without it the step failed on `windows-latest`, where `run:` defaults to PowerShell, before the build started.
+
+#### Still open (R7)
+1. **Job Object assignment happens after spawn**: the child is assigned once `spawn` has returned, so a grandchild started in that window escapes the job. Assigning a child created suspended (or with `PROC_THREAD_ATTRIBUTE_JOB_LIST`) would close it.
+2. **No graceful stop**: `request_stop` returns `false` on Windows, so every shutdown is a hard `TerminateJobObject`; the plan's `taskkill /T` fallback is not implemented. `AssignProcessToJobObject` can also fail with `ERROR_ACCESS_DENIED` when the shell already runs inside a job (CI, some launchers), and `adopt` then kills the child and reports a failed start.
+3. **No Windows payload launcher**: `bundled_launcher` returns `None` off Unix and the Unix launcher path has no `.exe`, so `Source::Bundled` is unreachable on Windows. A Windows payload needs `hermes-payload\bin\hermes-sidecar.exe` (or `.cmd`), `python.exe` from python-build-standalone as the venv entry point, the payload registered as a Tauri resource for `x86_64-pc-windows-msvc`, and `is_executable_file` checking `.exe`/`.cmd`/`.bat` instead of accepting any regular file.
 
 #### What is left
 1. Run the CI build workflow on `windows-latest` to confirm NSIS and WiX (MSI) bundle generation.
 2. Configure production code signing via Azure Trusted Signing or a PFX certificate to satisfy Microsoft SmartScreen.
 3. Test runtime execution and process lifecycle termination on Windows 10 and Windows 11.
-4. Validate that the compile-gated Windows Job Object implementation in [crates/hermes-sidecar/src/process/windows.rs](../crates/hermes-sidecar/src/process/windows.rs) reliably terminates child and grandchild processes upon application exit.
+4. Validate that the compile-gated Windows Job Object implementation in [crates/hermes-sidecar/src/process/windows.rs](../crates/hermes-sidecar/src/process/windows.rs) reliably terminates child and grandchild processes upon application exit (see "Still open" above).
 5. Verify deep link registry entries written by the NSIS and MSI installers and confirm single-instance forwarding.
+6. Prove the `.cmd` backend path end to end: `cmd.exe` is started with the command line `src/batch.rs` builds, and `hermes.cmd` resolves through `PATH`.
 
 ---
 

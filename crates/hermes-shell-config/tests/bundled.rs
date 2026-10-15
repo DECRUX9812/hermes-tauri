@@ -4,6 +4,11 @@
 //! Real files in real temp dirs; nothing is executed here. The real-process
 //! proof against the 341 MB payload is `tests/bundled_payload.rs`, which is
 //! `#[ignore]`d by default.
+//!
+//! The fixture payload tree marks its launcher executable with a Unix mode,
+//! which is what the launcher check tests on Unix; Windows decides by extension
+//! (and has no bundled launcher yet), so this target is Unix-only.
+#![cfg(unix)]
 
 use std::ffi::OsString;
 use std::fs;

@@ -13,9 +13,17 @@ ureq = "2"
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
+# `Win32_Security` carries `CreateJobObjectW` (its signature takes a
+# `SECURITY_ATTRIBUTES` pointer); `Win32_System_Threading` carries
+# `JOBOBJECT_EXTENDED_LIMIT_INFORMATION`, which embeds `IO_COUNTERS`;
+# `Win32_System_SystemInformation` carries `GetSystemDirectoryW`, used to find
+# the real `cmd.exe` for batch backends.
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
+    "Win32_Security",
     "Win32_System_JobObjects",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
 ] }
 
 [dev-dependencies]

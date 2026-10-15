@@ -1,6 +1,11 @@
 //! Source order, PATH lookup, config file parsing and error typing for
 //! `resolve`. Everything runs against real temp dirs and real files; the
 //! spawned-command values are plain data (nothing is executed here).
+//!
+//! The fixtures mark a file executable with a Unix mode, and that is what
+//! `is_executable_file` checks on Unix; Windows decides by extension instead,
+//! so this target is Unix-only.
+#![cfg(unix)]
 
 use std::ffi::OsString;
 use std::fs;

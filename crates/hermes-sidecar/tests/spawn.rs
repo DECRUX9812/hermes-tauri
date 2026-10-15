@@ -1,3 +1,9 @@
+//! Process-group lifecycle: the fixture is started, observed and reaped with
+//! Unix signals (`tests/common` probes `/proc` and `kill(2)`), so this target is
+//! Unix-only. Windows process handling is the Job Object path in
+//! `src/process/windows.rs`, which is compile-checked rather than run here.
+#![cfg(unix)]
+
 mod common;
 
 use std::time::{Duration, Instant};

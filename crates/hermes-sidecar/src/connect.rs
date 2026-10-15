@@ -1,5 +1,5 @@
 use std::io;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::Arc;
@@ -135,19 +135,18 @@ fn spawn(
     });
     let output = Arc::new(Output::open(cfg.log_path.as_deref())?);
 
-    let mut command = Command::new(program);
+    let spawn_error = |source: io::Error| SidecarError::Spawn {
+        program: program.clone(),
+        source,
+    };
+    let mut command = process::command(program, args).map_err(spawn_error)?;
     command
-        .args(args)
         .envs(cfg.env.iter().map(|(key, value)| (key, value)))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     scrub_env(&mut command);
     process::configure(&mut command);
-    let spawn_error = |source: io::Error| SidecarError::Spawn {
-        program: program.clone(),
-        source,
-    };
     let mut child = command.spawn().map_err(spawn_error)?;
     let stdout = child.stdout.take().expect("stdout is piped");
     let stderr = child.stderr.take().expect("stderr is piped");

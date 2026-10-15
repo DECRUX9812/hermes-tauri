@@ -3,6 +3,10 @@
 //! Blocking by design: call [`connect`] and [`Backend::shutdown`] from a background thread.
 
 mod backend;
+// Windows-only, but compiled under `test` too so its quoting is unit-tested on
+// every platform.
+#[cfg(any(windows, test))]
+mod batch;
 mod config;
 mod connect;
 mod error;

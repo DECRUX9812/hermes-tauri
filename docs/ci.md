@@ -35,6 +35,15 @@ Runs code quality and verification checks on every push, PR, and tag:
   - Formatting: `cargo fmt --all -- --check`
   - Linting: `cargo clippy --workspace --all-targets --locked -- -D warnings`
   - Test Suite: `cargo test --workspace --locked`
+- **Windows Code Paths**: `rustup target add x86_64-pc-windows-msvc`, then, for the two pure-Rust crates that hold Windows-only code:
+  - `cargo check --locked --target x86_64-pc-windows-msvc --all-targets -p hermes-sidecar -p hermes-shell-config`
+  - `cargo clippy --locked --target x86_64-pc-windows-msvc --all-targets -p hermes-sidecar -p hermes-shell-config -- -D warnings -A clippy::result_large_err`
+
+  `clippy::result_large_err` is the one lint that is allowed, and only here: on Windows `ConfigError::ConfigFile` in `crates/hermes-shell-config/src/config.rs` crosses clippy's 128-byte threshold, which it does not on Linux. Fixing that means boxing the error, which belongs to whoever owns that file. Everything else is denied as usual.
+
+  Before this, `cfg(windows)` code was never compiled anywhere: this job built only the Linux target, and the Windows runner only ran the build, so two missing `windows-sys` features and a missing method in `hermes-sidecar` stayed invisible until `cargo tauri build` on Windows. `src-tauri` is not part of this check: its Windows paths are compiled by the `build` job on the real runner with the real toolchain.
+
+  The step points `CC_x86_64_pc_windows_msvc` and `AR_x86_64_pc_windows_msvc` at a no-op tool it creates itself. `cargo check` emits metadata and never links, so the C and assembly parts of the one C dependency (`ring`, through `ureq`'s TLS) are not needed on a runner without an MSVC toolchain, and no C artifact reaches a link step. The Rust-level checking of `cfg(windows)` code is unaffected; the `build` job still compiles the real thing with MSVC.
 
 Clippy, the tests, and the release build pass `--locked`, so CI builds from the committed `Cargo.lock` and fails instead of re-resolving it.
 
@@ -56,7 +65,9 @@ Compiles the application across the target operating system matrix.
 | Windows x64 | `windows-latest` | `x86_64-pc-windows-msvc` | `nsis,msi` |
 
 ##### Signing Environment Preparation
-The `Prepare signing environment` step selectively exports signing secrets to `$GITHUB_ENV` to prevent empty variables from causing `tauri-action` to fail:
+The `Prepare signing environment` step runs with `shell: bash` on every runner. Its script is bash (`set -euo pipefail`, `${!var}`, heredocs, `openssl`), and `run:` on a Windows runner defaults to PowerShell, where the step used to exit non-zero before the build had even started. Git Bash is present on `windows-latest`, so the same script now runs there.
+
+The step selectively exports signing secrets to `$GITHUB_ENV` to prevent empty variables from causing `tauri-action` to fail:
 - Single-line secrets are written only when set and non-empty:
   - `APPLE_CERTIFICATE_PASSWORD`
   - `APPLE_SIGNING_IDENTITY`
@@ -110,7 +121,7 @@ The workflow references the following secrets by name:
 
 *Note on Windows Code Signing*: `WINDOWS_CERTIFICATE` and `WINDOWS_CERTIFICATE_PASSWORD` (or Azure Trusted Signing) are noted in `build.yml` comments but are not yet enabled in the step env block. Windows builds currently proceed unsigned.
 
-If signing secrets are absent, the workflow completes an **unsigned build** without errors.
+With no signing secrets set, the workflow is *meant* to produce an unsigned build: the prepare step writes nothing to `GITHUB_ENV`, no `--config` is passed to `tauri-action`, the build runs without signing, and the artifact upload then requires the bundles to exist (`if-no-files-found: error`). What is proven is narrower: the prepare step is bash on every runner, so it no longer fails on `windows-latest` before the build. Whether the unsigned Windows build and its NSIS/MSI upload complete has never been observed, because no run of this workflow has been made; see the per-platform status in [platforms.md](platforms.md#5-windows-x64-x86_64-pc-windows-msvc).
 
 ---
 
