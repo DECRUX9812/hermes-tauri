@@ -17,3 +17,6 @@ RUN cargo install tauri-cli --version '^2' --locked --root /usr/local \
 
 # linuxdeploy (AppImage) cannot mount FUSE inside a container.
 ENV APPIMAGE_EXTRACT_AND_RUN=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends rustfmt rust-clippy \
+    && rm -rf /var/lib/apt/lists/*
