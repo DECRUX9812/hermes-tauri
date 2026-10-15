@@ -483,9 +483,7 @@ show_command() {
   fi
   run_id="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
   make_server_command "$port" "$run_id"
-  printf 'HERMES_TAURI_CMD='
-  printf '%q ' "${SERVER_CMD[@]}"
-  printf '\n'
+  env -i "${SERVER_ENV[@]}" "$python" -c 'import json, sys; print(json.dumps(sys.argv[1:]))' "${SERVER_CMD[@]}"
 }
 
 seed_demo() {

@@ -14,7 +14,7 @@ Set `HERMES_TAURI_TEST_DIR` to use a separate instance directory, for example:
 
 ```sh
 export HERMES_TAURI_PIN="/path/to/hermes-checkout"
-export HERMES_TAURI_TEST_DIR=/tmp/hermes-tauri-test-t2b
+export HERMES_TAURI_TEST_DIR=/tmp/hermes-tauri-test-demo
 scripts/test-hermes.sh start
 scripts/test-hermes.sh status
 scripts/test-hermes.sh stop
@@ -28,11 +28,10 @@ the selected directory. Each instance checks the listening ports before choosing
 instance is skipped by the next start.
 
 Use `status` to check health, `url` to retrieve the private launch link, and `cmd` to print the
-backend command as a shell-quoted assignment (`HERMES_TAURI_CMD=env -i … hermes webapp …`). Note
-that the shell reads `HERMES_TAURI_CMD` as a JSON array of argv, so convert that output before
-using it as the variable (see the spawn example in the [README](../README.md#quick-start)). The
-launch link is stored with mode `0600`; do not
-paste it into logs or reports. `verify-isolation` inspects every process in the managed server
+backend command as the JSON argv array that `HERMES_TAURI_CMD` expects, for example
+`HERMES_TAURI_CMD="$(scripts/test-hermes.sh cmd 18810)" hermes-tauri`. The printed array holds no
+launch link or session token. The launch link is stored with mode `0600`; do not paste it into logs
+or reports. `verify-isolation` inspects every process in the managed server
 group, prints only `HOME`, `HERMES_HOME`, and `HERMES_RUNTIME_DIR`, and lists any open descriptors
 under the real Hermes home with their access mode and a relative path. It fails on unexpected
 environment values or any writable descriptor there; read-only interpreter/library descriptors

@@ -34,7 +34,7 @@ checkout; they were run on the Linux x86_64 workstation described in
 ```sh
 # Point the scripts at the Hermes checkout, and isolate this run's state.
 export HERMES_TAURI_PIN="$PWD/../_hermes-pin"
-export HERMES_TAURI_TEST_DIR=/tmp/hermes-tauri-test-t7
+export HERMES_TAURI_TEST_DIR=/tmp/hermes-tauri-test-demo
 
 # 1. Start a disposable, isolated Hermes on a free port in 18800-18899.
 scripts/test-hermes.sh start
@@ -45,11 +45,8 @@ scripts/test-hermes.sh start
 hermes-tauri --url "$(scripts/test-hermes.sh url)"
 
 # 2b. Or let the shell start the backend itself. `HERMES_TAURI_CMD` is a JSON
-#     array of argv; the pipeline below converts the shell-form command that
-#     `test-hermes.sh cmd` prints into that JSON array.
-HERMES_TAURI_CMD="$(scripts/test-hermes.sh cmd 18810 | sed 's/^HERMES_TAURI_CMD=//' \
-  | python3 -c 'import json,shlex,sys; print(json.dumps(shlex.split(sys.stdin.read())))')" \
-  hermes-tauri
+#     array of argv, and `test-hermes.sh cmd` prints exactly that.
+HERMES_TAURI_CMD="$(scripts/test-hermes.sh cmd 18810)" hermes-tauri
 
 # 3. Stop the test server (a spawned backend is stopped when the shell exits).
 scripts/test-hermes.sh stop
@@ -170,8 +167,9 @@ a plain browser, each call degrades to the browser's own mechanism.
   brief window could escape it (R1 #7, [docs/platforms.md](docs/platforms.md)).
 - The auto-updater verifies the signature over the payload, but the version string in the update
   manifest is not covered by that signature (R2 L3).
-- The Python payload pins Starlette 0.52.1 to keep the sidecar compatible; the trade-off is
-  described in [docs/python-sidecar.md](docs/python-sidecar.md).
+- The Python payload resolves Starlette 0.52.1, which is below the `1.0.1` version pinned for
+  CVE-2026-48710: `hermes_plus` requires `starlette<1`. This is a recorded trade-off, see
+  [docs/python-sidecar.md](docs/python-sidecar.md).
 - Group-chat rooms do not hydrate from the server mirror in a fresh profile (a UI boot race,
   described in [docs/test-hermes.md](docs/test-hermes.md)).
 - The global hotkey needs X11 or a focused XWayland window; native Wayland is not supported by the
