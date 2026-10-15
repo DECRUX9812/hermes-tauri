@@ -146,6 +146,7 @@ fn handle_menu(app: &AppHandle, id: &str) {
 
 /// Shows and focuses the main window (tray item, single-instance focus).
 pub fn show_window(app: &AppHandle) {
+    crate::splash::dismiss(app, "the user asked for the main window");
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.unminimize();
@@ -156,6 +157,7 @@ pub fn show_window(app: &AppHandle) {
 /// Left click and the global hotkey: hide when visible and focused, else
 /// show and focus.
 pub fn toggle_window(app: &AppHandle) {
+    crate::splash::dismiss(app, "the user asked for the main window");
     let Some(window) = app.get_webview_window("main") else {
         return;
     };

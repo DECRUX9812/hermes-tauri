@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-app-painted"
+description = "Enables the app_painted command without any pre-configured scope."
+commands.allow = ["app_painted"]
+
+[[permission]]
+identifier = "deny-app-painted"
+description = "Denies the app_painted command without any pre-configured scope."
+commands.deny = ["app_painted"]

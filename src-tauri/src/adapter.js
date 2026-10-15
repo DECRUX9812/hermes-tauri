@@ -80,6 +80,30 @@
     { capture: true }
   );
 
+  // The shell's splash covers the window until this app has painted. Only the
+  // backend page reports it: the bundled boot page has no native permission for
+  // `app_painted`, and the splash is not covered by anything. Wait for load,
+  // then for visible text, then for two frames, so the frame is really on
+  // screen; the cap reports anyway, so a page that never fills in still lets
+  // the shell's own cap take the splash away.
+  if (/^https?:$/.test(location.protocol)) {
+    const reportFirstPaint = () => {
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          tauri.core.invoke('app_painted').catch(() => undefined);
+        })
+      );
+    };
+    const awaitFirstPaint = deadline => {
+      if ((document.body?.innerText ?? '').trim() || Date.now() >= deadline) {
+        reportFirstPaint();
+        return;
+      }
+      setTimeout(() => awaitFirstPaint(deadline), 100);
+    };
+    window.addEventListener('load', () => awaitFirstPaint(Date.now() + 30000), { once: true });
+  }
+
   let installedBridge;
   Object.defineProperty(window, 'hermesDesktop', {
     configurable: true,

@@ -348,8 +348,12 @@ def parse_xwd(data):
     fields = struct.unpack(">25I", data[:100])
     header_size, width, height = fields[0], fields[4], fields[5]
     byte_order, bits_per_pixel, stride, ncolors = fields[7], fields[11], fields[12], fields[19]
-    if bits_per_pixel != 32:
-        fail(f"unsupported XWD depth ({bits_per_pixel} bits per pixel)")
+    # Xvfb's root capture reports 24 bits per pixel while any window is mapped
+    # (and 32 while none is), but it stores four bytes per pixel either way:
+    # bytes_per_line == width * 4. The header's depth is therefore not the
+    # stride, and both depths decode with the same code below.
+    if bits_per_pixel not in (24, 32) or stride != width * 4:
+        fail(f"unsupported XWD format ({bits_per_pixel} bits per pixel, stride {stride} for width {width})")
     start = header_size + ncolors * 12
     order = "little" if byte_order == 0 else "big"
     masks = (fields[14], fields[15], fields[16])
@@ -467,6 +471,17 @@ def ram(args):
         fail(f"{len(leftovers)} process(es) survived the stop: {', '.join(leftovers)}")
 
 
+def log_matches(path, offset, pattern):
+    """True when the log grew past `offset` and holds `pattern` after it."""
+    try:
+        with open(path, "rb") as stream:
+            stream.seek(offset)
+            text = stream.read().decode("utf-8", "replace")
+    except OSError:
+        return False
+    return re.search(pattern, text) is not None
+
+
 def startup_run(args, index):
     if args.fresh_dir:
         shutil.rmtree(args.fresh_dir, ignore_errors=True)
@@ -475,6 +490,9 @@ def startup_run(args, index):
     log_path = args.log or tempfile.mkstemp(prefix="measure-startup-", suffix=".log")[1]
     workdir = tempfile.mkdtemp(prefix="measure-run-")
     pidfile = os.path.join(workdir, "pid")
+    # A fixed --log is appended to across runs, so a stop pattern must only count
+    # lines this run wrote.
+    log_offset = os.path.getsize(log_path) if args.stop_log and os.path.exists(log_path) else 0
     wrapper = start_command(args.command, env, log_path, pidfile)
     elapsed = None
     try:
@@ -485,17 +503,24 @@ def startup_run(args, index):
         while time.monotonic() < deadline:
             if not alive(root):
                 fail(f"run {index}: command exited before a window was painted (see the log)")
-            if env_display is None:
-                env_display = display_env(root)
-            for wid in window_ids(env_display, root):
-                _x, _y, width, height = window_box(env_display, wid)
-                if width < MIN_WINDOW or height < MIN_WINDOW:
-                    continue
-                if is_painted(xwd_bytes(env_display, "-id", str(wid))):
+            if args.stop_log:
+                # The command reports its own milestone; the window check cannot
+                # see the difference between the splash and the app behind it.
+                if log_matches(log_path, log_offset, args.stop_log):
                     elapsed = (time.monotonic() - started) * 1000
                     break
-            if elapsed is not None:
-                break
+            else:
+                if env_display is None:
+                    env_display = display_env(root)
+                for wid in window_ids(env_display, root):
+                    _x, _y, width, height = window_box(env_display, wid)
+                    if width < MIN_WINDOW or height < MIN_WINDOW:
+                        continue
+                    if is_painted(xwd_bytes(env_display, "-id", str(wid))):
+                        elapsed = (time.monotonic() - started) * 1000
+                        break
+                if elapsed is not None:
+                    break
             time.sleep(0.05)
     finally:
         leftovers = stop_tree(wrapper, wrapper.pid, _root_or_none(workdir))
@@ -520,6 +545,12 @@ def startup(args):
         "painted": f"visible window >= {MIN_WINDOW}x{MIN_WINDOW} whose XWD grid has >= 2 colors",
         "screen": SCREEN,
     }
+    if args.stop_log:
+        record["clock"] = (
+            "first observed command pid (written just before exec) to the first line the "
+            "command wrote matching --stop-log"
+        )
+        record["painted"] = f"the command's own log line matching {args.stop_log!r}"
     print(json.dumps(record, sort_keys=True))
     sys.stderr.write(f"{args.label} startup median {record['median_ms']} ms over {args.runs} runs\n")
     sys.stderr.write(f"log: {log_path}\n")
@@ -593,6 +624,9 @@ def build_parser():
     startup_parser.add_argument("--runs", type=int, default=3)
     startup_parser.add_argument("--timeout", type=float, default=120.0)
     startup_parser.add_argument("--fresh-dir", help="directory wiped and recreated before each run (must be under /tmp)")
+    startup_parser.add_argument("--stop-log", metavar="REGEX",
+                                help="stop at the first line the command writes to --log that matches REGEX "
+                                     "(a shell that reports its own first frame) instead of at the first painted window")
     return parser
 
 

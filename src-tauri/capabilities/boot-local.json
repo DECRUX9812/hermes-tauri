@@ -3,6 +3,6 @@
   "identifier": "boot-local",
   "description": "Allows the bundled boot page to read connection state and retry.",
   "local": true,
-  "windows": ["main"],
+  "windows": ["main", "splash"],
   "permissions": ["allow-boot-state", "allow-boot-retry", "core:event:allow-listen"]
 }

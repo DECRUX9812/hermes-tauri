@@ -6,6 +6,7 @@ mod hotkey;
 mod native;
 mod polyfills;
 mod sidecar;
+mod splash;
 mod tray;
 mod updater;
 
@@ -36,7 +37,8 @@ fn main() {
             sidecar::boot_retry,
             native::native_open_external,
             native::native_notify,
-            native::native_select_paths
+            native::native_select_paths,
+            sidecar::app_painted
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -67,6 +69,7 @@ fn main() {
                     .title("Hermes Tauri")
                     .inner_size(1280.0, 820.0)
                     .min_inner_size(900.0, 600.0)
+                    .center()
                     // Polyfills first, so app code and the adapter both see them.
                     .initialization_script(polyfills::script())
                     .initialization_script(adapter::script())
@@ -97,6 +100,7 @@ fn main() {
                         )
                     })
                     .build()?;
+            splash::create(&handle)?;
 
             let close_app = handle.clone();
             let close_notified = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));

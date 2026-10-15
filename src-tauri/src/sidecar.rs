@@ -32,6 +32,16 @@ pub enum BootPhase {
     Unreachable,
 }
 
+impl BootPhase {
+    /// A phase the shell cannot leave on its own. The main window shows the
+    /// same boot page in one of these, so the splash has nothing left to
+    /// cover and must go: it is always on top, and its Retry reaches the same
+    /// boot manager.
+    fn is_failure(self) -> bool {
+        matches!(self, BootPhase::NoConfig | BootPhase::Unreachable)
+    }
+}
+
 #[derive(Clone, Serialize)]
 pub struct BootStatus {
     pub phase: BootPhase,
@@ -155,7 +165,16 @@ impl BootManager {
     pub fn start(&self, app: AppHandle) {
         let config = match self.resolved.as_ref() {
             Ok(Resolved::Configured { config, .. }) => config.clone(),
-            Ok(Resolved::NotConfigured) | Err(_) => return,
+            // No attempt will run, so the splash would stay up forever over a
+            // main window that already shows the same boot page.
+            Ok(Resolved::NotConfigured) => {
+                crate::splash::dismiss(&app, "no Hermes is configured");
+                return;
+            }
+            Err(error) => {
+                crate::splash::dismiss(&app, error);
+                return;
+            }
         };
         let attempt = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         let (done_tx, done_rx) = mpsc::channel();
@@ -212,9 +231,13 @@ impl BootManager {
         let config = match self.resolved.as_ref() {
             Ok(Resolved::Configured { config, .. }) => config.clone(),
             Ok(Resolved::NotConfigured) => {
+                crate::splash::dismiss(&app, "no Hermes is configured");
                 return Err("No Hermes is configured".to_owned());
             }
-            Err(error) => return Err(error.clone()),
+            Err(error) => {
+                crate::splash::dismiss(&app, error);
+                return Err(error.clone());
+            }
         };
         let attempt = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         inner.status = BootStatus::probing(None);
@@ -223,6 +246,15 @@ impl BootManager {
         let (done_tx, done_rx) = mpsc::channel();
         inner.attempt_done_rx = Some(done_rx);
         drop(inner);
+
+        // A retry loads a fresh copy of the remote app, so the splash goes back
+        // up before the attempt starts: the boot page must not be replaced by a
+        // blank window while the app's bundle executes, exactly as on the first
+        // start. Creating it before the attempt means a failure that follows
+        // can only dismiss a splash that exists.
+        if let Err(error) = crate::splash::create(&app) {
+            log(&format!("Could not put the splash back: {error}"));
+        }
 
         let manager = self.clone();
         thread::spawn(move || {
@@ -395,6 +427,10 @@ impl BootManager {
             inner.origin = Some(origin.clone());
             inner.launching = true;
         }
+        // The splash is on screen and the app is about to load in the main
+        // window: from here the cap runs, so a page that never paints its first
+        // frame cannot keep the splash up forever.
+        crate::splash::arm_timeout(&app);
         self.navigate_main(&app, url, None);
 
         // Watch the launch page until the token is consumed, then apply a
@@ -512,7 +548,8 @@ impl BootManager {
             .window("main")
             .permission("allow-native-open-external")
             .permission("allow-native-notify")
-            .permission("allow-native-select-paths");
+            .permission("allow-native-select-paths")
+            .permission("allow-app-painted");
         app.add_capability(capability)
             .map_err(|error| format!("Could not grant Hermes native capabilities: {error}"))?;
         *added = Some(origin.to_owned());
@@ -535,6 +572,14 @@ impl BootManager {
             }
             inner.status = status.clone();
         }
+        if status.phase.is_failure() {
+            // The main window shows the same boot page (with Retry), so the
+            // splash must not stay in front of it.
+            crate::splash::dismiss(
+                app,
+                status.error.as_deref().unwrap_or("the start-up failed"),
+            );
+        }
         let _ = app.emit("boot-state", status);
     }
 
@@ -551,6 +596,15 @@ pub fn boot_state(manager: State<'_, BootManager>) -> BootStatus {
 #[tauri::command]
 pub fn boot_retry(manager: State<'_, BootManager>, app: AppHandle) -> Result<(), String> {
     manager.retry(app)
+}
+
+/// Called by the backend page once its first frame is on screen (adapter.js).
+/// Takes no arguments and only removes the splash; the capability that reaches
+/// it is scoped to the backend origin on the main window.
+#[tauri::command]
+pub fn app_painted(app: AppHandle) {
+    log("First frame of the Hermes app painted");
+    crate::splash::dismiss(&app, "the app painted its first frame");
 }
 
 pub fn log(message: &str) {
@@ -575,7 +629,7 @@ fn immediate_route_origin(origin: Option<&str>, launching: bool) -> Option<Strin
 
 #[cfg(test)]
 mod tests {
-    use super::immediate_route_origin;
+    use super::{immediate_route_origin, BootPhase};
 
     const ORIGIN: &str = "http://127.0.0.1:18810";
 
@@ -592,5 +646,24 @@ mod tests {
             immediate_route_origin(Some(ORIGIN), false),
             Some(ORIGIN.to_owned())
         );
+    }
+
+    /// The splash is always on top, so it may only outlive the app's load while
+    /// the shell is still trying. A failure phase leaves the main window
+    /// showing the same boot page, and the phases in between are the ones the
+    /// splash exists to cover.
+    #[test]
+    fn only_a_failure_phase_dismisses_the_splash() {
+        for phase in [BootPhase::NoConfig, BootPhase::Unreachable] {
+            assert!(phase.is_failure(), "{phase:?} must dismiss the splash");
+        }
+        for phase in [
+            BootPhase::Probing,
+            BootPhase::Starting,
+            BootPhase::Waiting,
+            BootPhase::Ready,
+        ] {
+            assert!(!phase.is_failure(), "{phase:?} must keep the splash");
+        }
     }
 }
