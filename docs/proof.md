@@ -63,6 +63,23 @@ One run of `scripts/proof.sh --bin $HOME/.cache/hermes-tauri/target-T6/release/h
 `--spawn-shutdown` passed in its own run: the shell started its own Hermes (pid 3806995, pgid 3806995) and SIGTERM to the shell
 stopped it within 1 s, with no surviving pid or pgid.
 
+### T20 rerun (with the `retry` check)
+
+The same script ran again on the T20 build (binary `$HOME/.cache/hermes-tauri/target-t20/release/hermes-tauri`, 25,034,640 B,
+sha256 `664397e3ee7824b327890ad2716f9456441c43024e9182919fd37da6cecf9317`; deb 8,961,474 B), now with the `retry` check in it:
+nine shots and three checks passed, exit 0.
+
+| check | result |
+|---|---|
+| reload-session | PASS |
+| retry | PASS |
+| splash-cap | PASS |
+
+The nine shots are the same pages as the table above (they are in that run's output directory, not committed); their frames differ
+because every run is its own fresh webview profile and seed. The retry check's shell log (`shell-retry.log`) shows the three
+attempts it drives: `Hermes connection failed` twice, for the start and for the first click (both against the closed port), then
+`Hermes backend ready at http://127.0.0.1:18802` and `First frame of the Hermes app painted` after the second click.
+
 ## Reproducing the proof (T6 build, `scripts/proof.sh`)
 
 One lock-free driver: it starts a disposable test Hermes, re-executes itself under a private D-Bus session and Xvfb, drives the shell
