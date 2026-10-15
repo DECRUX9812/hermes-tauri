@@ -204,13 +204,22 @@ there too.
 - `scripts/webkit-smoke.mjs` and `scripts/webkitgtk-smoke.py` — render the boot, home, team,
   kanban, studio, and settings routes under WebKitGTK and Chromium and diff console/page errors;
   see [docs/webkit-compat.md](docs/webkit-compat.md).
-- [docs/proof.md](docs/proof.md) — screenshot proof of the shell UI routes.
+- `scripts/proof.sh` — the end-to-end Xvfb proof: starts a disposable Hermes, drives the shell with
+  real input (xdotool keys and clicks plus the shell's own deep links) and writes nine verified
+  screenshots plus two checks. `--spawn-shutdown` proves the spawned backend dies with the shell.
+  See [docs/proof.md](docs/proof.md).
+- [docs/proof.md](docs/proof.md) — the screenshot proof, the image list and how to reproduce it.
 
 For headless runs, wrap the GUI command so WebKit gets a display and a private session bus:
 
 ```sh
 dbus-run-session -- xvfb-run -a -s "-screen 0 1440x900x24" hermes-tauri --url "$(scripts/test-hermes.sh url)"
 ```
+
+The shell keeps its own boot page in a second, always-on-top window (the splash) until the app's page
+reports its first painted frame, so the window is never a flat blank colour while the app's JavaScript
+bundle executes. The splash is removed by the app's first frame, by a failed start (the main window
+then shows the same boot page with Retry) or by a 30 s cap, whichever comes first.
 
 ## Native features and their web fallbacks
 
@@ -263,7 +272,10 @@ a plain browser, each call degrades to the browser's own mechanism.
   CVE-2026-48710: `hermes_plus` requires `starlette<1`. This is a recorded trade-off, see
   [docs/python-sidecar.md](docs/python-sidecar.md).
 - Group-chat rooms do not hydrate from the server mirror in a fresh profile (a UI boot race,
-  described in [docs/test-hermes.md](docs/test-hermes.md)).
+  described in [docs/test-hermes.md](docs/test-hermes.md)). The proof therefore creates a room
+  through the UI and types one neutral message into it, instead of showing the seeded room.
+- The splash and the main window share a title and a size. Under a tiling Wayland compositor the
+  compositor may place them side by side rather than stacked ([docs/platforms.md](docs/platforms.md)).
 - The global hotkey needs X11 or a focused XWayland window; native Wayland is not supported by the
   upstream crate ([docs/platforms.md](docs/platforms.md)).
 

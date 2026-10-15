@@ -8,6 +8,7 @@ mod native;
 mod payload;
 mod polyfills;
 mod sidecar;
+mod splash;
 mod tray;
 mod updater;
 
@@ -38,7 +39,8 @@ fn main() {
             sidecar::boot_retry,
             native::native_open_external,
             native::native_notify,
-            native::native_select_paths
+            native::native_select_paths,
+            sidecar::app_painted
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -86,6 +88,7 @@ fn main() {
                     .title("Hermes Tauri")
                     .inner_size(1280.0, 820.0)
                     .min_inner_size(900.0, 600.0)
+                    .center()
                     // Polyfills first, so app code and the adapter both see them.
                     .initialization_script(polyfills::script())
                     .initialization_script(adapter::script())
@@ -116,6 +119,7 @@ fn main() {
                         )
                     })
                     .build()?;
+            splash::create(&handle)?;
 
             let close_app = handle.clone();
             let close_notified = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -151,8 +155,15 @@ fn main() {
             updater::init(&handle, &preferences.updater);
 
             let signal_app = handle.clone();
+            let signal_manager = manager.clone();
             if let Err(error) = ctrlc::set_handler(move || {
                 sidecar::log("Termination signal received");
+                // `AppHandle::exit` does not always run the run-loop handlers:
+                // when the exit request cannot be queued it exits the process
+                // directly, which would orphan a spawned backend. Stop it here
+                // too; `shutdown` is idempotent, so the run-loop paths below
+                // still work (T16 proof check 08).
+                signal_manager.shutdown();
                 signal_app.exit(0);
             }) {
                 sidecar::log(&format!(

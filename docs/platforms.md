@@ -29,7 +29,13 @@ ports 18800-18899:
 - **Rendering**: the boot, home, team, kanban, studio, and settings routes render without console or
   page errors under WebKitGTK 2.52.6, matching Chromium ([docs/webkit-compat.md](webkit-compat.md)).
 - **Measurements**: size, idle RAM, and startup figures are in
-  [docs/measurements.md](measurements.md), measured with the T1 build.
+  [docs/measurements.md](measurements.md), measured with the T1 build and again with the T6 build.
+- **Splash-until-paint**: the shell keeps its own boot page in a second, always-on-top window (the
+  splash) until the app's page reports its first painted frame, so the window is never a flat blank
+  colour while the app's JavaScript bundle executes. On Wayland the compositor decides window
+  placement, so the splash and the main window may not overlap exactly as they do under X11, where
+  both are centred; the splash still covers the main window because it is always on top and the
+  compositor stacks it above, but a tiling compositor can place the two side by side.
 
 Behaviour that is only exercised on other systems, or under a real desktop session, is described
 below. The known cross-cutting limitations are collected in the [README](../README.md#known-limitations).
@@ -42,7 +48,10 @@ below. The known cross-cutting limitations are collected in the [README](../READ
 - **Code Quality**: Verified in the `check` job via `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, and `cargo test --workspace` ([build.yml:43-48](../.github/workflows/build.yml#L43-48)).
 
 #### What is left
-1. Complete the Xvfb headless runtime proof (owned by T6/T7) to verify startup, session navigation, WebGL/studio rendering, and memory footprint.
+1. ~~Complete the Xvfb headless runtime proof~~ Done in T6: `scripts/proof.sh` drives the shell under
+   `dbus-run-session -- xvfb-run` and writes 9 verified screenshots plus two checks (the reload keeps the
+   session; the splash cap removes the always-on-top window). See [docs/proof.md](proof.md). WebGL/studio
+   rendering and the long-run memory footprint are still open.
 2. Verify package installation on native host distros (Debian, Ubuntu, Fedora/RHEL, Arch) rather than containerized environments.
 3. Validate desktop environment integration under both GNOME Shell (with and without the AppIndicator extension) and KDE Plasma.
 4. Verify Wayland vs X11 behavior for global window toggling (X11 only via `global-hotkey`; requires active XWayland window focus on Wayland sessions) and deep-link activation.
@@ -180,7 +189,7 @@ Unlike native system packages, the Tauri AppImage **bundles WebKitGTK and its ru
 - `usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/WebKitWebProcess`
 - `usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/injected-bundle/libwebkit2gtkinjectedbundle.so`
 
-Because WebKitGTK, JavaScriptCore, and their runtime helper processes are bundled, the AppDir's `usr/lib` directory is ~252 MB, producing an AppImage bundle of ~85.7 MiB (in contrast to the native `.deb` package, which is only ~6.84 MiB).
+Because WebKitGTK, JavaScriptCore, and their runtime helper processes are bundled, the AppDir's `usr/lib` directory is ~252 MB, producing an AppImage bundle of ~85.7 MiB (in contrast to the native `.deb` package, which is only ~6.84 MiB). The T6 build measures 87.39 MiB AppImage and 8.54 MiB deb from the same AppDir layout.
 
 #### Glibc Baseline & Oldest Supported Distro
 The official Tauri AppImage documentation states:

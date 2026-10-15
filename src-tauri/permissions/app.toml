@@ -22,3 +22,8 @@ commands.allow = ["native_notify"]
 identifier = "allow-native-select-paths"
 description = "Allows the Hermes web app to open a native file and folder picker."
 commands.allow = ["native_select_paths"]
+
+[[permission]]
+identifier = "allow-app-painted"
+description = "Allows the Hermes web app to report its first painted frame, which removes the splash."
+commands.allow = ["app_painted"]

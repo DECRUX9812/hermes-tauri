@@ -16,6 +16,7 @@ fn main() {
             "native_open_external",
             "native_notify",
             "native_select_paths",
+            "app_painted",
         ]),
     ))
     .expect("failed to run tauri-build");

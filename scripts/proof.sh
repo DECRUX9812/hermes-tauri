@@ -171,7 +171,9 @@ SHELL_LOG=""
 SHELL_LOG_LINES=0
 STATE_DIR=""
 SHOT_FAILED=0
+reload_mark=0
 declare -a SHOT_ORDER=() SHOT_RESULT=() SHOT_COLOURS=() SHOT_MD5=() SHOT_DESC=()
+declare -a CHECK_ORDER=() CHECK_RESULT=() CHECK_DESC=()
 
 # shellcheck disable=SC2329  # runs from the EXIT/INT/TERM trap at the end of the file
 inner_cleanup() {
@@ -248,12 +250,61 @@ wait_window() {
 }
 
 place_window() {
-  local wid
-  wid="$(window_id)"
-  [[ -n "$wid" ]] || return 1
-  xdotool windowmove "$wid" 0 0 2>/dev/null || true
-  xdotool windowsize "$wid" "${WINDOW_SIZE%x*}" "${WINDOW_SIZE#*x}" 2>/dev/null || true
+  local wid placed=0
+  # The splash and the main window share the title, so every match is placed.
+  while read -r wid; do
+    xdotool windowmove "$wid" 0 0 2>/dev/null || true
+    xdotool windowsize "$wid" "${WINDOW_SIZE%x*}" "${WINDOW_SIZE#*x}" 2>/dev/null || true
+    placed=1
+  done < <(xdotool search --name "$WINDOW_TITLE" 2>/dev/null)
+  ((placed == 1)) || return 1
   sleep 0.5
+}
+
+# 01b-splash: the boot page stays in front of the window while the remote app
+# loads. Taken after the launch navigation and before the app's first frame,
+# and only while the splash window is still mapped, so a PASS here means the
+# user really saw the boot page and not a blank window.
+#
+# The splash is a second webview, so its own boot page needs a moment to paint
+# its first frame; under load that moment is seconds, and a shot taken before it
+# is a picture of a white window. Sample until the boot page is really on
+# screen, and re-check after each capture that the splash is still the window in
+# front and the app has not painted: the app's first frame dismisses the splash,
+# so either signal means this shot's moment has passed.
+splash_shot() {
+  local windows deadline
+  if ! wait_log 'Main window navigation' 45 >/dev/null; then
+    record 01b-splash FAIL "-" "-" "the launch navigation was never logged"
+    return 1
+  fi
+  deadline=$((SECONDS + 45))
+  while :; do
+    if grep -q 'First frame of the Hermes app painted' "$SHELL_LOG"; then
+      record 01b-splash FAIL "-" "-" "the app painted before the splash could be captured"
+      return 1
+    fi
+    windows="$(window_count)"
+    if ((windows != 2)); then
+      record 01b-splash FAIL "-" "-" \
+        "$windows window(s) carry the app title, so the splash was already gone"
+      return 1
+    fi
+    if capture 01b-splash; then
+      if ((CAP_COLOURS >= 4)) && ! capture_repeats &&
+        ! grep -q 'First frame of the Hermes app painted' "$SHELL_LOG"; then
+        record 01b-splash PASS "$CAP_COLOURS" "$CAP_MD5" \
+          "the splash (the boot page) still in front of the window while the Hermes app loads, before its first frame"
+        return 0
+      fi
+    fi
+    if ((SECONDS >= deadline)); then
+      record 01b-splash FAIL "${CAP_COLOURS:--}" "${CAP_MD5:--}" \
+        "blank frame: ${CAP_COLOURS:-unreadable} distinct colours on the sample grid, under 4"
+      return 1
+    fi
+    sleep 0.5
+  done
 }
 
 # Fast probe of what is on screen (xwd, ~0.2 s), used only to decide when to
@@ -264,7 +315,7 @@ probe_colours() {
 }
 
 # Painted means the sample grid holds real content: a blank window scores 1 and
-# the shell's own loading splash 3.
+# the shell's own boot page (the splash) scores 9 and up.
 wait_painted() {
   local min="$1" timeout="${2:-45}" deadline=$((SECONDS + ${2:-45})) colours="" hits=0
   while ((SECONDS < deadline)); do
@@ -318,18 +369,26 @@ wait_repaint() {
 
 # Waits for a new line matching the pattern in the shell's own stderr log, so
 # waits are driven by what the shell really did rather than by a fixed sleep.
+# The marker advances to the matched line only: lines the shell wrote after it
+# (the app paints while this function is returning) belong to the next wait, or
+# a later wait would miss them.
 wait_log() {
   local pattern="$1" timeout="${2:-25}" deadline=$((SECONDS + ${2:-25})) line
   local -a lines=()
+  local consumed=0 index
   while ((SECONDS < deadline)); do
     mapfile -t lines < <(tail -n +"$((SHELL_LOG_LINES + 1))" "$SHELL_LOG" 2>/dev/null)
-    for line in "${lines[@]}"; do
+    consumed=$SHELL_LOG_LINES
+    for ((index = 0; index < ${#lines[@]}; index++)); do
+      line="${lines[$index]}"
+      consumed=$((consumed + 1))
       if [[ "$line" =~ $pattern ]]; then
-        SHELL_LOG_LINES="$(wc -l <"$SHELL_LOG")"
+        SHELL_LOG_LINES=$consumed
         printf '%s\n' "$line"
         return 0
       fi
     done
+    SHELL_LOG_LINES=$consumed
     if ! kill -0 "$SHELL_PID" 2>/dev/null; then
       printf 'proof: the shell died while waiting for /%s/\n' "$pattern"
       tail -n 20 "$SHELL_LOG"
@@ -378,6 +437,20 @@ record() {
 
 CAP_COLOURS=""
 CAP_MD5=""
+# A check is a proof that reads the shell's own log and the window list instead
+# of a screenshot: it has no frame to show, but it must still be reported.
+record_check() {
+  local name="$1" result="$2" desc="$3"
+  CHECK_ORDER+=("$name")
+  CHECK_RESULT+=("$result")
+  CHECK_DESC+=("$desc")
+  if [[ "$result" == PASS ]]; then
+    printf 'PASS %s\n' "$name"
+  else
+    printf 'FAIL %s: %s\n' "$name" "$desc"
+    SHOT_FAILED=1
+  fi
+}
 
 capture() {
   local name="$1"
@@ -391,27 +464,51 @@ capture() {
   return 0
 }
 
+# True when the frame just captured is byte-identical to an earlier shot: the
+# screen never changed, so the shot would prove nothing. Sets CAP_REPEAT to the
+# name of the shot it repeats.
+capture_repeats() {
+  local index
+  CAP_REPEAT=""
+  for index in "${!SHOT_MD5[@]}"; do
+    if [[ "${SHOT_MD5[$index]}" == "$CAP_MD5" ]]; then
+      CAP_REPEAT="${SHOT_ORDER[$index]}"
+      return 0
+    fi
+  done
+  return 1
+}
+
 # Captures one shot, checks the frame is painted and not a copy of an earlier
-# shot, and prints its PASS or FAIL line.
+# shot, and prints its PASS or FAIL line. `timeout` is how long the frame is
+# given to reach `min` colours: a route that paints a loading state first (the
+# Studio page prints "building the studio…" for a while) passes through a frame
+# below the threshold, and the shot must be of the page, not of that state. The
+# last frame is kept when the timeout runs out, so the FAIL still shows what was
+# on screen.
 shot() {
-  local name="$1" min="$2" desc="$3" index earlier
-  if ! capture "$name"; then
-    record "$name" FAIL "-" "-" "the screen could not be captured and read back"
-    return 1
-  fi
+  local name="$1" min="$2" desc="$3" timeout="${4:-0}"
+  local deadline=$((SECONDS + timeout))
+  while :; do
+    if ! capture "$name"; then
+      record "$name" FAIL "-" "-" "the screen could not be captured and read back"
+      return 1
+    fi
+    if ((CAP_COLOURS >= min)) || ((SECONDS >= deadline)); then
+      break
+    fi
+    sleep 1
+  done
   if ((CAP_COLOURS < min)); then
     record "$name" FAIL "$CAP_COLOURS" "$CAP_MD5" \
       "blank frame: $CAP_COLOURS distinct colours on the sample grid, under $min"
     return 1
   fi
-  for index in "${!SHOT_MD5[@]}"; do
-    earlier="${SHOT_MD5[$index]}"
-    if [[ "$earlier" == "$CAP_MD5" ]]; then
-      record "$name" FAIL "$CAP_COLOURS" "$CAP_MD5" \
-        "identical to ${SHOT_ORDER[$index]}.png: the screen never changed"
-      return 1
-    fi
-  done
+  if capture_repeats; then
+    record "$name" FAIL "$CAP_COLOURS" "$CAP_MD5" \
+      "identical to $CAP_REPEAT.png: the screen never changed"
+    return 1
+  fi
   record "$name" PASS "$CAP_COLOURS" "$CAP_MD5" "$desc"
 }
 
@@ -481,9 +578,16 @@ inner_main() {
   wait_window 30 || die 'the shell never mapped a window'
   place_window
   wait_log 'Hermes backend ready at' 45 >/dev/null || die 'the shell never connected to the test Hermes'
-  if wait_painted "$MIN_COLOURS" 60; then
+  splash_shot
+  wait_log 'First frame of the Hermes app painted' 60 >/dev/null || die 'the app never painted its first frame'
+  local windows
+  windows="$(window_count)"
+  if ((windows != 1)); then
+    record 02-sessions FAIL "-" "-" \
+      "the app painted its first frame but $windows windows carry the app title: the always-on-top splash is still up"
+  elif wait_painted "$MIN_COLOURS" 60; then
     shot 02-sessions "$MIN_COLOURS" \
-      "home route after attaching: the seeded demo session titles in the sidebar and the seeded recent tasks on the page"
+      "home route after attaching: the seeded demo session titles in the sidebar and the seeded recent tasks on the page" 20
   else
     record 02-sessions FAIL "-" "-" "the app never painted after attaching"
   fi
@@ -497,21 +601,24 @@ inner_main() {
 
   group_chat_shot
 
-  # 06/07: in-place reload with the shell's own F5 accelerator. The shot after
-  # the reload must differ from the one before it, which is what the F5 case is
-  # supposed to show.
+  # 06/07: in-place reload with the shell's own F5 accelerator (the adapter
+  # intercepts it and calls location.reload()). 06 shows the group chat view the
+  # UI is on, which is in-app state, so the window's URL is still the #/team
+  # route; 07 shows what a reload really restores, the route and its data.
   xdotool windowfocus "$(window_id)" 2>/dev/null || true
   xdotool mousemove --sync "${PARK%,*}" "${PARK#*,}" 2>/dev/null || true
   sleep 1
   shot 06-reload-before "$MIN_COLOURS" \
-    "the group chat route before the reload"
+    "the group chat view (in-app state on the #/team route) before the reload" 20
   xdotool windowfocus "$(window_id)" 2>/dev/null || true
+  reload_mark="$(wc -l <"$SHELL_LOG")"
   xdotool key --clearmodifiers F5
   # A reload must show the webview's loading state before it paints again, so
   # this wait never accepts a painted frame that never left the screen.
   if wait_repaint "$MIN_COLOURS" 45 100000; then
     shot 07-reload-after "$MIN_COLOURS" \
-      "the same route after F5: the webview reloaded and repainted, still attached"
+      "the #/team route after F5: the webview reloaded, repainted from the backend and kept the session" 20
+    reload_session_check "$reload_mark"
   else
     record 07-reload-after FAIL "-" "-" \
       "F5 did not reload the webview: the frame never left its painted state and came back"
@@ -523,10 +630,40 @@ inner_main() {
     "the same window after a second invocation handed it the ${DEEPLINK_SHOT_ROUTE} route"
 
   stop_shell
+  cap_check
+  stop_shell
   write_readme
-  printf 'proof: done, %s shots, %s\n' "${#SHOT_ORDER[@]}" \
+  printf 'proof: done, %s shots and %s checks, %s\n' "${#SHOT_ORDER[@]}" \
+    "${#CHECK_ORDER[@]}" \
     "$([[ "$SHOT_FAILED" == 1 ]] && printf 'at least one failed' || printf 'all passed')"
   exit "$SHOT_FAILED"
+}
+
+# The F5 proof: the webview must really re-navigate to the route it was on, and
+# the session must survive it. Read from the lines the shell wrote after the
+# keypress (the marker), so a navigation logged before the reload cannot pass
+# this. No second window and no connection error: the token was reused, not
+# re-minted.
+reload_session_check() {
+  local mark="$1" windows lines
+  windows="$(window_count)"
+  lines="$(tail -n +"$((mark + 1))" "$SHELL_LOG" 2>/dev/null)"
+  if ((windows != 1)); then
+    record_check reload-session FAIL \
+      "F5 left $windows windows carrying the app title, so a login or error window appeared"
+    return 1
+  fi
+  if ! grep -q 'Main window navigation: .*#/team' <<<"$lines"; then
+    record_check reload-session FAIL \
+      "F5 produced no new navigation to the route the window was on"
+    return 1
+  fi
+  if grep -q 'Hermes connection failed' <<<"$lines"; then
+    record_check reload-session FAIL "the shell lost the backend across the reload"
+    return 1
+  fi
+  record_check reload-session PASS \
+    "F5 re-navigated the webview to the same #/team route, the app painted again from the backend, no second window and no connection error: the session survived the reload"
 }
 
 # A deep link followed by a shot: the link must be logged by the running shell
@@ -541,7 +678,9 @@ nav_shot() {
     record "$name" FAIL "-" "-" "the screen never came back painted after the $route deep link"
     return 1
   fi
-  shot "$name" "$min" "$desc"
+  # A plugin page can paint its own loading state first (the Studio page prints
+  # "building the studio…" for a while), so the shot is given time to settle.
+  shot "$name" "$min" "$desc" 30
 }
 
 # 05-group-chat: a group chat created through the UI with demo bots and a neutral
@@ -602,7 +741,39 @@ group_chat_shot() {
   sleep 1.0
 
   shot 05-group-chat "$MIN_COLOURS" \
-    "a group chat created through the UI with two demo bots and one submitted neutral message"
+    "a group chat created through the UI with two demo bots and one submitted neutral message" 20
+}
+
+# The splash cap (splash.rs, 30 s) is the safety net for an app page that never
+# reports a first frame. The app paints in ~6-9 s on this machine, so a real cap
+# would only ever be seen as "it did not fire"; this check shortens the cap
+# through the shell's own environment knob and watches the same code path: the
+# always-on-top window must go away on its own while the app is still loading,
+# leaving exactly one window, and the app must then paint as usual.
+cap_check() {
+  local cap_ms=3000 windows
+  printf 'proof: splash cap check, HERMES_TAURI_SPLASH_CAP_MS=%s\n' "$cap_ms"
+  export HERMES_TAURI_SPLASH_CAP_MS="$cap_ms"
+  start_shell cap --url "$(cat "$PORT_DIR/launch-url")"
+  unset HERMES_TAURI_SPLASH_CAP_MS
+  wait_window 30 || die 'the shell never mapped a window'
+  place_window
+  if ! wait_log "Splash removed: the app did not paint within ${cap_ms} ms" 90 >/dev/null; then
+    record_check splash-cap FAIL "the cap never removed the splash"
+    return 1
+  fi
+  windows="$(window_count)"
+  if ((windows != 1)); then
+    record_check splash-cap FAIL \
+      "the cap fired but $windows windows still carry the app title"
+    return 1
+  fi
+  if ! wait_log 'First frame of the Hermes app painted' 60 >/dev/null; then
+    record_check splash-cap FAIL "the app never painted after the cap removed the splash"
+    return 1
+  fi
+  record_check splash-cap PASS \
+    "the cap removed the always-on-top splash while the app was still loading (same code path as the 30 s default, shortened to ${cap_ms} ms); one window was left and the app painted afterwards"
 }
 
 # ── spawn mode ───────────────────────────────────────────────────────────────
@@ -623,7 +794,7 @@ spawn_shutdown_check() {
   wait_window 30 || die 'the shell never mapped a window'
   place_window
   wait_log 'Hermes backend ready at' 90 >/dev/null || die 'the shell never brought its own Hermes up'
-  wait_painted "$MIN_COLOURS" 60 || die 'the app never painted in spawn mode'
+  wait_log 'First frame of the Hermes app painted' 60 >/dev/null || die 'the app never painted in spawn mode'
 
   local pid pgid attempt survived
   while IFS= read -r pid; do
@@ -820,7 +991,10 @@ PY
 }
 
 write_readme() {
-  local index label
+  local index label target="$OUT/README.md"
+  # Spawn mode writes no shots and must not clobber the index of the run that
+  # did, so it gets its own file next to it.
+  [[ "$SPAWN_MODE" == 1 ]] && target="$OUT/README-spawn-shutdown.md"
   {
     printf '# Proof run — %s\n\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     printf "Shell binary: \`%s\`\n\n" "$BIN"
@@ -831,6 +1005,15 @@ write_readme() {
     printf 'webview profile and nothing is written to the real home. Both the shell and\n'
     printf 'the backend run from a scratch working directory, so no local path or git\n'
     printf 'branch name is on screen.\n\n'
+    if [[ "$SPAWN_MODE" != 1 ]]; then
+      printf '01-boot is the boot page of the main window, with the splash already gone because\n'
+      printf 'the start-up failed. 01b-splash is the splash window itself while the app loads:\n'
+      printf 'the shell keeps its own boot page in front of the window until the app reports its\n'
+      printf 'first painted frame, so there is no blank window. 05-group-chat is a group chat\n'
+      printf 'created through the UI with one typed neutral message, not the seeded "Demo\n'
+      printf 'Product Room": the seeded room does not hydrate in a fresh webview profile (a UI\n'
+      printf 'boot race in the hermes-bots plugin, also in Chromium; see docs/test-hermes.md).\n\n'
+    fi
     printf '| shot | result | colours | md5 | what it shows |\n|---|---|---|---|---|\n'
     for index in "${!SHOT_ORDER[@]}"; do
       label="${SHOT_ORDER[$index]}"
@@ -839,11 +1022,18 @@ write_readme() {
         "$label" "${SHOT_RESULT[$index]}" "${SHOT_COLOURS[$index]}" \
         "${SHOT_MD5[$index]}" "${SHOT_DESC[$index]}"
     done
+    if ((${#CHECK_ORDER[@]} > 0)); then
+      printf '\n| check | result | what it proves |\n|---|---|---|\n'
+      for index in "${!CHECK_ORDER[@]}"; do
+        printf '| %s | %s | %s |\n' \
+          "${CHECK_ORDER[$index]}" "${CHECK_RESULT[$index]}" "${CHECK_DESC[$index]}"
+      done
+    fi
     printf "\n\`colours\` is the number of distinct colours on a 32x20 sample grid of each PNG:\n"
-    printf 'a blank window scores 1 and the shell'"'"'s own loading splash 3, so every row with\n'
-    printf 'a colour count shows real content. A FAIL line means the shot was written and\n'
-    printf 'then rejected, never that a stale file was left behind.\n'
-  } >"$OUT/README.md"
+    printf 'a blank window scores 1 and the boot page (the splash) 9 and up, so every row\n'
+    printf 'with a colour count shows real content. A FAIL line means the shot was written\n'
+    printf 'and then rejected, never that a stale file was left behind.\n'
+  } >"$target"
 }
 
 if [[ "$INNER" == 1 ]]; then
