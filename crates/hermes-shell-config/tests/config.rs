@@ -391,6 +391,70 @@ fn empty_or_missing_path_is_not_configured() {
     assert!(matches!(resolve(&inputs), Ok(Resolved::NotConfigured)));
 }
 
+/// `target` expressed relative to this test process's current directory. Both
+/// are absolute, so the result reaches `target` again from here.
+fn relative_from_cwd(target: &Path) -> PathBuf {
+    let cwd = std::env::current_dir().expect("current dir");
+    let mut cwd_parts = cwd.components();
+    let mut target_parts = target.components();
+    while let (Some(a), Some(b)) = (cwd_parts.clone().next(), target_parts.clone().next()) {
+        if a != b {
+            break;
+        }
+        cwd_parts.next();
+        target_parts.next();
+    }
+    let mut relative = PathBuf::new();
+    for _ in cwd_parts {
+        relative.push("..");
+    }
+    relative.extend(target_parts);
+    relative
+}
+
+#[test]
+fn default_ignores_relative_path_entries() {
+    // A relative PATH entry resolves against whatever directory the shell runs
+    // in, so a `hermes` planted there must never win over an absolute entry.
+    let planted = tempfile::tempdir().expect("tempdir");
+    let planted_hermes = install_hermes(planted.path(), true);
+    let trusted = tempfile::tempdir().expect("tempdir");
+    let trusted_hermes = install_hermes(trusted.path(), true);
+
+    let relative = relative_from_cwd(planted.path());
+    assert!(!relative.is_absolute(), "{relative:?} should be relative");
+    // Fixture check: the relative entry really does reach an executable
+    // `hermes`, so the assertions below rest on the skip and not on a typo.
+    let reached = relative.join("hermes");
+    assert!(fs::metadata(&reached)
+        .expect("relative hermes exists")
+        .is_file());
+    assert_ne!(
+        fs::metadata(&reached)
+            .expect("metadata")
+            .permissions()
+            .mode()
+            & 0o111,
+        0
+    );
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut inputs = Inputs::empty(dir.path().to_path_buf());
+    inputs.path = Some(os_paths(&[&relative, trusted.path()]));
+    let (config, source) = expect_configured(resolve(&inputs).expect("resolve"));
+    assert_eq!(source, Source::DefaultOnPath(trusted_hermes.clone()));
+    assert_eq!(
+        config.command.first().map(String::as_str),
+        trusted_hermes.to_str()
+    );
+
+    // With only the relative entry there is nothing safe to spawn.
+    let mut inputs = Inputs::empty(dir.path().to_path_buf());
+    inputs.path = Some(os_paths(&[&relative]));
+    assert!(matches!(resolve(&inputs), Ok(Resolved::NotConfigured)));
+    assert!(fs::metadata(&planted_hermes).is_ok());
+}
+
 // --- Redaction ---
 
 #[test]
@@ -415,4 +479,47 @@ fn debug_of_inputs_hides_the_token() {
     assert!(!debug.contains(&token()));
     assert!(!debug.contains("shh"));
     assert!(debug.contains("SECRET_KEY"));
+}
+
+#[test]
+fn debug_of_inputs_hides_command_secrets() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut inputs = Inputs::empty(dir.path().to_path_buf());
+    inputs.env_cmd = Some(format!(
+        r#"["/opt/hermes/hermes","webapp","--api-key","demoapi",
+            "--session-token=demo-token-value","--password=demo-password-value",
+            "--notify-password","demo-notify-value","--url={}","--log-level","debug"]"#,
+        launch_link()
+    ));
+
+    let debug = format!("{inputs:?}");
+    for secret in [
+        "demoapi",
+        "demo-token-value",
+        "demo-password-value",
+        "demo-notify-value",
+    ] {
+        assert!(!debug.contains(secret), "{secret} leaked in {debug}");
+    }
+    // The `--url=` value keeps its session token redacted too.
+    assert!(!debug.contains(&token()));
+    // The flag names and the ordinary arguments survive.
+    for kept in [
+        "/opt/hermes/hermes",
+        "webapp",
+        "--api-key",
+        "--session-token",
+        "--password",
+        "--notify-password",
+        "--log-level",
+        "debug",
+    ] {
+        assert!(debug.contains(kept), "{kept} missing from {debug}");
+    }
+
+    // A command that is not a JSON array is not echoed either.
+    inputs.env_cmd = Some(r#"{"api_key": "demoapi"}"#.to_owned());
+    let debug = format!("{inputs:?}");
+    assert!(!debug.contains("demoapi"), "leaked in {debug}");
+    assert!(debug.contains("<not a JSON array>"));
 }
