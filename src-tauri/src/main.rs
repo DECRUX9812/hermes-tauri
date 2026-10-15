@@ -151,8 +151,15 @@ fn main() {
             updater::init(&handle, &preferences.updater);
 
             let signal_app = handle.clone();
+            let signal_manager = manager.clone();
             if let Err(error) = ctrlc::set_handler(move || {
                 sidecar::log("Termination signal received");
+                // `AppHandle::exit` does not always run the run-loop handlers:
+                // when the exit request cannot be queued it exits the process
+                // directly, which would orphan a spawned backend. Stop it here
+                // too; `shutdown` is idempotent, so the run-loop paths below
+                // still work (T16 proof check 08).
+                signal_manager.shutdown();
                 signal_app.exit(0);
             }) {
                 sidecar::log(&format!(

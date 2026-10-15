@@ -327,11 +327,50 @@ Measured on the real 341 MB payload (T16b, inside `hermes-tauri-builder:26.04`):
 (14-53 s measured, 46-47 s while the machine was busy), and the sidecar's 60 s default does not cover
 both.
 
-**T16 still has to wire it:** read the resource dir and the app-data dir from the Tauri app handle,
-call `ensure_unpacked` with `<resource>/hermes-payload.tar.zst` and
-`<resource>/payload-manifest.json` *before* `resolve_with_bundled`, pass the returned `Bundled`, and
-show `InstallError` on the boot page. `crates/hermes-shell-config/src/payload_install.rs` is Unix-only,
-like the payload's launcher, so the Windows path stays `cfg`-gated (§5.4).
+**T16 wired it** — see §5.9 for the shell side (resource/app-data dirs, the boot page phase, the build
+line, the measured sizes, and the environment the payload must *not* inherit).
+
+### 5.9 Shell wiring (T16)
+
+The shell installs and spawns the payload itself, and never on the thread that draws the window:
+
+| step | where |
+|---|---|
+| find the archive + manifest in the resource dir | `src-tauri/src/payload.rs:41` (`locate`), called from `src-tauri/src/main.rs:66` |
+| hand them to the boot manager | `BootManager::new(config_dir, payload, log)`, `src-tauri/src/sidecar.rs:169` |
+| start the first attempt | `BootManager::prepare`, `sidecar.rs:193`, from setup (`main.rs:163`) |
+| unpack on the attempt thread | `sidecar.rs:274` (`resolve`) → `payload::unpack` (`payload.rs:58`) → `ensure_unpacked` |
+| resolve against the unpacked payload | `config::load(config_dir, Some(&bundled))`, `src-tauri/src/config.rs:43` |
+| ready timeout | `config.rs:86` (`with_bundled_timeout`) raises it to 90 s (`BUNDLED_READY_TIMEOUT`, `config.rs:25`) only when the resolved command lives under the payload dir (`spawns_the_payload`, `config.rs:101`) |
+| boot page | the `preparing` phase (`boot/boot.js:20`) shows "Preparing Hermes (first run)…"; an install error publishes the error state with Retry (`sidecar.rs:274`, never a panic) |
+
+`locate` needs **both** files, so a build without the payload resources (the plain `cargo tauri build`)
+falls back silently to `HERMES_TAURI_URL`/`HERMES_TAURI_CMD`/`config.toml`/PATH: one binary serves both
+bundles.
+
+```sh
+scripts/pack-payload.sh --allow-build-paths
+scripts/builder.sh bash -c 'cd src-tauri && cargo tauri build --bundles deb,appimage --config tauri.payload.conf.json'
+```
+
+`--allow-build-paths` is needed until the payload is rebuilt without build-path `*.pyc` (68 of them,
+§5.8), so that archive is for this experiment only and never a shipped artefact. Measured here
+(T16, `hermes-tauri-builder:26.04`): plain deb 8.54 MiB / AppImage 87.37 MiB, payload deb 92.80 MiB /
+AppImage 171.64 MiB — a delta of 84.3 MiB, which is the archive; the 327 MiB unpacked copy lands in the
+app-data dir on first run.
+
+**A spawned payload must not inherit the AppImage's interpreter environment.** The AppImage's `AppRun`
+exports `PYTHONHOME=$APPDIR/usr` and `PYTHONPATH=$APPDIR/usr/share/pyshared` for the GTK pieces it
+bundles. A payload launcher that inherits them dies before its first line of Python (`Fatal Python
+error: Failed to import encodings module`, the same message as T16a's dereferenced copy, from a
+different cause), so `crates/hermes-sidecar/src/connect.rs` (`SCRUBBED_ENV`, `scrub_env`) removes those
+variables from every child the shell spawns. `LD_LIBRARY_PATH` is deliberately left alone: the AppDir's
+libraries do not disturb the payload (measured), and they can only help on a host that lacks one.
+
+**Password mode.** With `auth = "password"` the front door serves a token-less `/login`, so the shell's
+"the launch page consumed its credential" check (`sidecar.rs:670`, `launch_consumed`) is true at once
+and a deep link arriving during login can preempt the login page. The payload defaults to `token`
+(`hermes_plus/server/settings.py`), so this affects only an explicit `auth = "password"`.
 
 ## 6. Status of claims
 

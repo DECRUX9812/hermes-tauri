@@ -5,9 +5,15 @@
 # Usage: scripts/proof-bundled.sh [--appimage PATH] [--out DIR] [--keep]
 #
 # `--out` is the whole scratch root: the fresh HOME (the payload unpacks ~330 MB
-# into it), the AppImage's own extraction dir (`TMPDIR`), the shots and the
-# logs. It must sit on a filesystem with room for ~700 MB and ~20k inodes; the
-# shared /tmp tmpfs is not always that, so the default is overridable.
+# into it), one AppImage extraction dir per launch (`$OUT/tmp-<label>`), the
+# shots and the logs. It must sit on a filesystem with room for ~1.5 GB and
+# ~60k inodes; the shared /tmp tmpfs is not always that, so the default is
+# overridable.
+#
+# Each launch gets a fresh `TMPDIR` because the AppImage's extract-and-run mode
+# unpacks the AppDir there: reusing the previous run's directory makes the next
+# launch exit in under 2 s with an empty log (measured on this host, where FUSE
+# is unavailable so the AppImage always extracts).
 #
 # Outer part: prepares a stub `xdg-open`, a fresh HOME under the scratch root
 # and a minimal PATH with no `hermes` on it, then re-executes this file inside
@@ -21,7 +27,8 @@
 #             `?token=<redacted>` and never a token; SIGTERM leaves no process of
 #             the payload's HERMES_HOME behind. (6a, 6e)
 #   launch 2  second run: the payload is already unpacked, so this is the
-#             unpack-free start-up time. (6e)
+#             unpack-free start-up time and the installed payload's `.ready`
+#             marker is untouched. (6e)
 #   launch 3  cold start with `hermes-tauri://open?path=/team`: the window ends
 #             on #/team with a live session, and F5 reloads it in place and
 #             keeps the session (two shots, different md5). (6b, 6c)
@@ -45,10 +52,10 @@ usage() {
 usage: scripts/proof-bundled.sh [--appimage PATH] [--out DIR] [--keep]
 
   --appimage PATH  the payload AppImage to drive (or HERMES_TAURI_BUNDLED_APPIMAGE)
-  --out DIR        scratch root: fresh HOME, AppImage extraction dir, shots and
-                   logs (default /tmp/hermes-tauri-t16/bundled). Needs ~700 MB
-                   and ~20k inodes free; it must stay inside this task's own
-                   scratch roots (/tmp/hermes-tauri-t16 or
+  --out DIR        scratch root: fresh HOME, one AppImage extraction dir per
+                   launch, shots and logs (default /tmp/hermes-tauri-t16/bundled).
+                   Needs ~1.5 GB and ~60k inodes free; it must stay inside this
+                   task's own scratch roots (/tmp/hermes-tauri-t16 or
                    ~/.cache/hermes-tauri/t16-proof).
   --keep           keep the scratch dir and the shell HOME (default: remove the HOME)
   -h, --help       this text
@@ -216,9 +223,11 @@ PY
 
 SHELL_PID=0
 SHELL_PGID=""
+SHELL_TMPDIR=""
 SHELL_LOG=""
 SHELL_LOG_LINES=0
 FAILED=0
+RUN_COMPLETE=0
 HOME_DIR=""
 SIDECAR_LOG=""
 ORIGIN=""
@@ -248,6 +257,14 @@ inner_cleanup() {
   if ((KEEP == 0)) && [[ -n "$HOME_DIR" ]] && under_scratch "$HOME_DIR"; then
     rm -rf "$HOME_DIR"
   fi
+  # The per-launch TMPDIRs hold one unpacked AppDir each (about 350 MB); they
+  # are only kept when the run stopped early, where they are the evidence.
+  if ((KEEP == 0 && RUN_COMPLETE == 1)); then
+    local dir
+    for dir in "$OUT"/tmp-*; do
+      [[ -d "$dir" ]] && under_scratch "$dir" && rm -rf "$dir"
+    done
+  fi
   exit "$status"
 }
 
@@ -255,21 +272,47 @@ shell_pgid() {
   ps -o pgid= -p "$SHELL_PID" 2>/dev/null | tr -d '[:space:]'
 }
 
+# The AppImage's extract-and-run mode unpacks the AppDir first and may run the
+# app as a child of its entry process, so a launch is only gone when the whole
+# process group it got is gone.
+group_alive() {
+  [[ -n "$SHELL_PGID" ]] || return 1
+  [[ -n "$(ps -o pid= -g "$SHELL_PGID" 2>/dev/null | tr -d '[:space:]')" ]]
+}
+
+# The app's own PID, as GTK prints it on its first warning. This is the process
+# that has to stop the payload on SIGTERM (T16 check 08).
+app_pid() {
+  grep -oE '\(hermes-tauri:[0-9]+\)' "$SHELL_LOG" 2>/dev/null |
+    head -n 1 | tr -dc '0-9'
+}
+
 stop_shell() {
   [[ "$SHELL_PID" =~ ^[1-9][0-9]*$ ]] || return 0
-  if kill -0 "$SHELL_PID" 2>/dev/null; then
-    kill -TERM "$SHELL_PID" 2>/dev/null || true
-    local attempt
-    for attempt in $(seq 1 80); do
-      kill -0 "$SHELL_PID" 2>/dev/null || break
-      sleep 0.25
-    done
-    if kill -0 "$SHELL_PID" 2>/dev/null; then
-      kill -KILL -- "-$SHELL_PGID" 2>/dev/null || true
-      sleep 0.5
+  local attempt app
+  # Signal the entry process, the app itself and the whole group: which of them
+  # is the app depends on how the AppImage runtime started it.
+  [[ -n "$SHELL_PGID" ]] && kill -TERM -- "-$SHELL_PGID" 2>/dev/null || true
+  kill -TERM "$SHELL_PID" 2>/dev/null || true
+  app="$(app_pid)"
+  [[ -n "$app" ]] && kill -TERM "$app" 2>/dev/null || true
+  for attempt in $(seq 1 120); do
+    if ! group_alive && { [[ -z "$app" ]] || ! kill -0 "$app" 2>/dev/null; }; then
+      break
     fi
+    sleep 0.25
+  done
+  if group_alive; then
+    kill -KILL -- "-$SHELL_PGID" 2>/dev/null || true
+    sleep 0.5
+  fi
+  # $SHELL_PID is this script's own child, so its pid cannot have been reused.
+  kill -KILL "$SHELL_PID" 2>/dev/null || true
+  if [[ -n "$app" ]] && kill -0 "$app" 2>/dev/null; then
+    note "the app process $app outlived its group"
   fi
   SHELL_PID=0
+  SHELL_PGID=""
 }
 
 # Starts the shell and fails loudly when it does not survive the start.
@@ -280,8 +323,16 @@ start_shell() {
   SHELL_LOG="$OUT/shell-$label.log"
   : >"$SHELL_LOG"
   SHELL_LOG_LINES=0
+  # Every launch gets its own TMPDIR. The AppImage's extract-and-run mode
+  # unpacks the AppDir into $TMPDIR and reusing that directory makes the next
+  # launch exit at once (measured: with a fresh TMPDIR the launch comes up, with
+  # the previous run's TMPDIR it dies in under 2 s with an empty log). It also
+  # keeps the unpacked AppDir inside our own scratch root, not the shared /tmp.
+  SHELL_TMPDIR="$OUT/tmp-$label"
+  rm -rf "$SHELL_TMPDIR"
+  mkdir -p "$SHELL_TMPDIR"
   env -u HERMES_TAURI_URL -u HERMES_TAURI_CMD -u HERMES_TAURI_ENV \
-    APPIMAGE_EXTRACT_AND_RUN=1 \
+    APPIMAGE_EXTRACT_AND_RUN=1 TMPDIR="$SHELL_TMPDIR" \
     setsid "$APPIMAGE" "$@" >"$SHELL_LOG" 2>&1 &
   SHELL_PID=$!
   printf '%s\n' "$SHELL_PID" >"$OUT/shell-$label.pid"
@@ -292,7 +343,7 @@ start_shell() {
     exit 1
   fi
   SHELL_PGID="$(shell_pgid)"
-  note "shell $label pid=$SHELL_PID pgid=$SHELL_PGID log=$SHELL_LOG"
+  note "shell $label pid=$SHELL_PID pgid=$SHELL_PGID tmp=$SHELL_TMPDIR log=$SHELL_LOG"
 }
 
 # Waits for a new line matching the pattern in the shell's own stderr log.
@@ -383,21 +434,22 @@ capture() {
 }
 
 # Captures one shot, checks it is painted and not a copy of an earlier shot.
+# A failure is recorded, never fatal: the run reports every check it can.
 shot() {
   local name="$1" desc="$2" min="${3:-$MIN_COLOURS}" colours md5 index
   colours="$(capture "$name")" || {
     record "$name" FAIL "the screen could not be captured"
-    return 1
+    return 0
   }
   if [[ -z "$colours" ]] || ((colours < min)); then
     record "$name" FAIL "blank frame: ${colours:-unreadable} colours, under $min"
-    return 1
+    return 0
   fi
   md5="$(md5sum "$OUT/$name.png" | cut -d' ' -f1)"
   for index in "${!SHOT_MD5[@]}"; do
     if [[ "${SHOT_MD5[$index]}" == "$md5" ]]; then
       record "$name" FAIL "identical to ${SHOT_ORDER[$index]}.png: the screen never changed"
-      return 1
+      return 0
     fi
   done
   SHOT_MD5+=("$md5")
@@ -424,6 +476,15 @@ now_ms() {
 
 sidecar_log_path() {
   find "$HOME_DIR" -name 'hermes-sidecar.log' 2>/dev/null | head -n 1
+}
+
+# mtime and size of the installed payload's `.ready` marker: installing the
+# payload rewrites it, reusing the installed copy leaves it alone.
+ready_marker_state() {
+  local marker
+  marker="$(find "$HOME_DIR" -name .ready -path '*payload*' 2>/dev/null | head -n 1)"
+  [[ -n "$marker" ]] || return 0
+  stat -c '%Y:%s' "$marker" 2>/dev/null
 }
 
 # The front door's token is 43 url-safe characters; the logs must never carry it.
@@ -459,9 +520,11 @@ inner_main() {
   rm -rf "$HOME_DIR"
   mkdir -p "$HOME_DIR" "$OUT/tmp"
   export HOME="$HOME_DIR"
-  # APPIMAGE_EXTRACT_AND_RUN unpacks the AppDir into $TMPDIR; keeping that
-  # inside our own scratch dir means a killed run leaves nothing in the shared
-  # /tmp root (the scratch dir is removed at the end of the run).
+  # The harness itself works under $OUT/tmp; `start_shell` gives every launch its
+  # own $OUT/tmp-<label>, because the AppImage's extract-and-run mode unpacks the
+  # AppDir into $TMPDIR and a reused directory breaks the next launch. Keeping
+  # all of it inside our own scratch dir also means a killed run leaves nothing
+  # in the shared /tmp root (the scratch dir is removed at the end of the run).
   export TMPDIR="$OUT/tmp"
   # No XDG overrides: the point of this proof is the real first-run layout under
   # a fresh HOME (app-data dir, app-log dir and the webview profile all land
@@ -478,12 +541,14 @@ inner_main() {
   local started painted first_ms origin
   started="$(now_ms)"
   start_shell first
-  wait_window 60 || die 'the shell never mapped a window'
+  wait_window 120 || die 'the shell never mapped a window'
   place_window
-  # The window maps while the manager thread is still unpacking the payload, so
-  # this frame is the boot page's own phase (a plain boot page scores few
-  # colours, hence the lower floor).
-  shot 00-preparing-phase "the boot page while the payload unpacks" 3
+  # The window maps before the webview has painted anything, and the boot page
+  # is dark, so its frame scores far fewer colours than an app page. Wait for it
+  # to render at all (a uniform frame scores 1) and keep the frame as evidence
+  # that a first run shows a phase instead of a blank window.
+  wait_painted 2 45 >/dev/null || note 'the boot page never painted a frame'
+  shot 00-preparing-phase "the boot page while the payload unpacks" 2
   wait_log 'Preparing the bundled Hermes payload' 60 >/dev/null ||
     note 'no preparing line (the payload was already unpacked?)'
   origin="$(wait_log 'Hermes backend ready at (http://127\.0\.0\.1:[0-9]+)' 240 || true)"
@@ -542,12 +607,21 @@ inner_main() {
   fi
 
   # ── launch 2: second run (payload already unpacked) ────────────────────────
+  local ready_before
+  ready_before="$(ready_marker_state)"
   started="$(now_ms)"
   start_shell second
   wait_window 60 || die 'the shell never mapped a window on the second run'
   place_window
   wait_log 'Hermes backend ready at http' 240 >/dev/null || die 'the second run never became ready'
   wait_painted "$MIN_COLOURS" 120 >/dev/null || note 'the UI did not paint on the second run'
+  # The first run installed the payload; a second run has to reuse it instead of
+  # unpacking the 84 MiB archive again (T16 step 6b).
+  if [[ -n "$ready_before" && "$ready_before" == "$(ready_marker_state)" ]]; then
+    record 08b-payload-not-reinstalled PASS "the second run reused the installed payload (its .ready marker is unchanged: $ready_before)"
+  else
+    record 08b-payload-not-reinstalled FAIL "the payload was installed again (marker before ${ready_before:-none}, after $(ready_marker_state))"
+  fi
   painted="$(now_ms)"
   local second_ms=$((painted - started))
   record 09-second-run PASS "second run painted $((second_ms / 1000)) s after launch, first run $((first_ms / 1000)) s"
@@ -609,6 +683,7 @@ inner_main() {
   printf 'bundled-proof: first run %s ms, second run %s ms\n' "$first_ms" "$second_ms"
   printf 'bundled-proof: done, %s checks, %s\n' "${#SHOT_ORDER[@]}" \
     "$([[ "$FAILED" == 1 ]] && printf 'at least one failed' || printf 'all passed')"
+  RUN_COMPLETE=1
   exit "$FAILED"
 }
 
