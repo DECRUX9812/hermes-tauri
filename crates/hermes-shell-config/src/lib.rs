@@ -9,7 +9,7 @@ mod deeplink;
 mod hotkey;
 mod updater;
 
-pub use config::{resolve, ConfigError, Inputs, Resolved, Source};
+pub use config::{resolve, resolve_with_bundled, Bundled, ConfigError, Inputs, Resolved, Source};
 pub use deeplink::{from_args, parse, DeepLinkError, Route};
 pub use hotkey::{hotkey, DEFAULT_HOTKEY};
 pub use updater::{settings, UpdaterSettings, CHECK_INTERVAL, FIRST_CHECK_DELAY};
