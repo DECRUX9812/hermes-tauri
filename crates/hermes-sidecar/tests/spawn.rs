@@ -155,6 +155,44 @@ fn dropping_backend_without_shutdown_kills_the_group() {
     let _ = std::fs::remove_file(log);
 }
 
+/// A bundled AppImage's `AppRun` exports `PYTHONHOME`/`PYTHONPATH` pointing into
+/// its own AppDir, and the shell hands its environment to the payload it spawns.
+/// The fixture is a real Python process, so an inherited `PYTHONHOME` would kill
+/// it before it printed anything.
+#[test]
+fn spawned_backend_does_not_inherit_the_shells_python_env() {
+    let log = log_path("python-env");
+    let mut cfg = base_config(fixture_command(&["--token", TOKEN, "--print-env"]), &log);
+    cfg.env = vec![
+        ("PYTHONHOME".to_owned(), "/appimage/usr".to_owned()),
+        (
+            "PYTHONPATH".to_owned(),
+            "/appimage/usr/share/pyshared".to_owned(),
+        ),
+        ("HERMES_HOME".to_owned(), "/tmp/hermes-home".to_owned()),
+    ];
+
+    let backend = connect(&cfg, |_| {}).expect("fixture becomes ready");
+    let text = std::fs::read_to_string(&log).expect("read the fixture log");
+    assert!(
+        text.contains("[webapp_fixture] PYTHONHOME=<unset>"),
+        "PYTHONHOME reached the payload; log:\n{text}"
+    );
+    assert!(
+        text.contains("[webapp_fixture] PYTHONPATH=<unset>"),
+        "PYTHONPATH reached the payload; log:\n{text}"
+    );
+    assert!(
+        text.contains("[webapp_fixture] HERMES_HOME=/tmp/hermes-home"),
+        "the shell's own environment did not reach the payload; log:\n{text}"
+    );
+    assert_eq!(
+        backend.shutdown().expect("shutdown"),
+        ShutdownReport::Terminated
+    );
+    let _ = std::fs::remove_file(log);
+}
+
 #[test]
 fn cancelling_a_slow_spawn_kills_the_child_quickly() {
     let log = log_path("cancel");
