@@ -40,7 +40,9 @@ fn the_packed_payload_unpacks_and_boots_from_the_app_data_dir() {
     let pack_out = scratch.join("pack");
     let data_dir = scratch.join("data");
 
-    // 1. Pack the real payload with the script a release build uses.
+    // 1. Pack the real payload with the script a release build uses, and
+    //    without --allow-build-paths: the pack gate itself must pass, so this
+    //    test refuses a tree whose *.pyc embed a build path.
     let script = workspace_root().join("scripts/pack-payload.sh");
     assert!(script.is_file(), "{} is missing", script.display());
     let started = Instant::now();
@@ -50,7 +52,6 @@ fn the_packed_payload_unpacks_and_boots_from_the_app_data_dir() {
         .arg(&payload)
         .arg("--out")
         .arg(&pack_out)
-        .arg("--allow-build-paths")
         .output()
         .expect("run scripts/pack-payload.sh");
     let pack_seconds = started.elapsed().as_secs_f32();
