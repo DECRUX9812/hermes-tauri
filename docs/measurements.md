@@ -73,6 +73,71 @@ at all (only `mesa_shader_cache`). With the harness's fresh-dir wipe disabled en
 the local splash and the remote app depending on which composites first. See `.oc/reports/T12.md` for the
 full profile, fix matrix and harness change.
 
+## WebKit render cost (T14)
+
+T14 investigated where WebKitGTK spends the ~5 s gap between window mapping (~0.5 s) and the first frame
+of the remote Hermes web app (~6–10 s), evaluating whether Skia software rasterization, Mesa llvmpipe GL,
+or JavaScript execution dominates, and whether shell-level environment variables can reduce it.
+
+### Startup matrix (interleaved baselines)
+
+Measured with the frozen T1 binary (`$HOME/.cache/hermes-tauri/bin-t1/hermes-tauri`) under `dbus-run-session --`
+and the standard harness (`scripts/measure.sh startup`, 3 cold runs per variant, fresh dir wiped per run,
+launch link passed via `HERMES_TAURI_URL`). Baseline sets were interleaved between each variant to separate
+variable effects from machine load drift:
+
+| Set / Variable | Runs (ms) | Median (ms) | Load before -> after |
+|---|---|---|---|
+| Baseline 1 | 6151.8, 8155.3, 4770.5 | 6151.8 | 4.19 -> 4.02 |
+| `WEBKIT_SKIA_ENABLE_CPU_RENDERING=1` | 6856.4, 8431.5, 9141.5 | 8431.5 | 4.02 -> 7.93 |
+| Baseline 2 | 8468.5, 8325.8, 6453.2 | 8325.8 | 7.93 -> 8.89 |
+| `WEBKIT_SKIA_ENABLE_CPU_RENDERING=1` + `WEBKIT_SKIA_CPU_PAINTING_THREADS=4` | 6155.8, 6371.6, 6236.5 | 6236.5 | 8.89 -> 9.55 |
+| Baseline 3 | 6294.4, 6271.7, 5136.8 | 6271.7 | 9.55 -> 9.43 |
+| `LIBGL_ALWAYS_SOFTWARE=1` | 6186.8, 6041.3, 7337.5 | 6186.8 | 9.43 -> 9.87 |
+| Baseline 4 | 6563.8, 8177.7, 8587.1 | 8177.7 | 9.87 -> 9.22 |
+| `JSC_useJIT=false` | 9570.3, 9178.7, 7330.7 | 9178.7 | 9.22 -> 8.61 |
+| Baseline 5 | 6195.6, 6292.2, 6339.5 | 6292.2 | 8.61 -> 7.96 |
+
+Both `WEBKIT_SKIA_ENABLE_CPU_RENDERING` and `WEBKIT_SKIA_CPU_PAINTING_THREADS` exist in WebKitGTK 2.52
+(`libwebkit2gtk-4.1-0` 2.52.6, introduced in Igalia's Skia integration). However, neither variable yields
+a benefit: `WEBKIT_SKIA_ENABLE_CPU_RENDERING=1` (8431.5 ms) matches its adjacent baseline (8325.8 ms), and
+adding 4 painting threads (6236.5 ms) matches baseline 3 (6271.7 ms). `LIBGL_ALWAYS_SOFTWARE=1` (6186.8 ms)
+shows that DRI3 failure probing is not an overhead source. Meanwhile, `JSC_useJIT=false` slows startup to
+9178.7 ms (+1.0–2.9 s over baselines), confirming that JIT is active and that JS execution speed is critical.
+
+### Page-side timing (WebKitGTK vs Chromium)
+
+Page-level instrumentation was captured in a 1280x820 viewport under the same Xvfb display to isolate network,
+DOM parsing, JavaScript compilation/execution, and paint milestones (3 runs each):
+
+| Metric | WebKitGTK (default) | WebKitGTK (Skia CPU) | Chromium (Playwright) |
+|---|---:|---:|---:|
+| `responseEnd` (ms) | 19.0 (19.0, 22.0, 19.0) | 22.0 (22.0, 38.0, 22.0) | 25.9 (76.8, 17.6, 25.9) |
+| `domInteractive` (ms) | 414.0 (370.0, 460.0, 414.0) | 531.0 (531.0, 642.0, 382.0) | 369.1 (371.4, 317.0, 369.1) |
+| `domContentLoadedEventEnd` (ms) | 1181.0 (1054.0, 1218.0, 1181.0) | 1305.0 (1305.0, 2065.0, 1045.0) | 1767.7 (2191.3, 1735.0, 1767.7) |
+| `loadEventEnd` (ms) | 1187.0 (1060.0, 1227.0, 1187.0) | 1313.0 (1313.0, 2075.0, 1050.0) | 2802.5 (3662.1, 2691.9, 2802.5) |
+| `first-paint` (ms) | none | none | 372.0 (428.0, 332.0, 372.0) |
+| `first-contentful-paint` (ms) | 4364.0 (4364.0, 4921.0, 4283.0) | 4569.0 (4513.0, 5651.0, 4569.0) | 2808.0 (3712.0, 2704.0, 2808.0) |
+| Longest `longtask` (ms) | not supported | not supported | 944.0 (1383.0, 871.0, 944.0) |
+| Total resource transfer (KB) | 290.6 (290.6, 290.6, 290.3) | 290.3 (290.3, 290.6, 290.3) | 9172.4 (9172.4, 9173.9, 9172.4) |
+| Total decoded size (KB) | 241.6 (241.6, 241.6, 241.6) | 241.6 (241.6, 241.6, 241.6) | 9100.5 (9100.5, 9101.9, 9100.5) |
+| Resource count | 250 (250, 250, 250) | 250 (250, 250, 250) | 250 (250, 250, 250) |
+
+WebKitGTK does not implement the Long Tasks API (`PerformanceObserver.supportedEntryTypes` does not include
+`longtask`). In Chromium, long tasks during bundle initialization reach 944–1383 ms.
+
+### Conclusion
+
+1. **The gap is JavaScript execution and bundle initialization, not rasterization/compositing.** Network and
+   initial DOM parsing finish in ~1.18 s. WebKit spends the next ~3.2 s parsing, compiling, and running the
+   React application scripts before reaching `first-contentful-paint` (~4.36 s in WebKit vs ~2.81 s in Chromium).
+2. **Skia CPU rasterization does not fix it.** Forcing CPU tile rendering (`WEBKIT_SKIA_ENABLE_CPU_RENDERING=1`)
+   does not improve FCP (4569 ms vs 4364 ms) or shell startup (8431.5 ms vs 8325.8 ms baseline). Mesa llvmpipe
+   software GL is not the bottleneck; the bottleneck precedes tile painting.
+3. **No environment variable provides a win.** The only effective remedy is architectural: keep the local shell
+   splash screen visible until the remote webview signals its first frame is ready, providing an immediate
+   ~1.7 s visual feedback instead of a 6 s blank window.
+
 ## Method
 
 - **Size**: a walk with `lstat`, no symlinks followed. Apparent size is the sum of `st_size`; on-disk size
