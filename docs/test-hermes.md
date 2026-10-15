@@ -79,6 +79,45 @@ scripts/test-hermes.sh status
 # -> running http://127.0.0.1:18800
 ```
 
+## Plugin settings fixture (`HERMES_TAURI_DEMO_SETTINGS_PLUGIN`)
+
+Settings > Plugins renders a form from the `config_schema` a Python plugin declares in its
+`plugin.yaml`. Proving that form inside the Tauri webview needs a plugin whose schema covers every
+field type, so `scripts/fixtures/demo-settings-plugin/` is a neutral fixture with one key per type
+(`str`, `str` + `choices`, `int`, `float`, `bool`, `list`, `dict`, `secret` with
+`env: DEMO_SETTINGS_API_KEY`). Its `__init__.py` registers nothing and only logs the `mode` value it
+reads back with `ctx.get_config`.
+
+`HERMES_TAURI_DEMO_SETTINGS_PLUGIN=1` copies that fixture into the selected test home's
+`plugins/demo-settings/` and adds `plugins.enabled: [demo-settings]` to the generated
+`config.yaml`. It is off by default, so every existing caller keeps the same behaviour and the same
+config.
+
+```sh
+export HERMES_TAURI_PIN="/path/to/hermes-checkout"
+HERMES_TAURI_TEST_DIR=/tmp/hermes-tauri-test-demo HERMES_TAURI_DEMO_SETTINGS_PLUGIN=1 \
+  scripts/test-hermes.sh start
+```
+
+`scripts/proof-plugin-settings.sh` is the end-to-end proof of that form. It starts its own test
+Hermes with the fixture enabled, then re-executes itself inside `dbus-run-session -- xvfb-run -a`,
+launches the shell, walks Capabilities > Plugins, opens the demo plugin's gear, edits one value of
+every non-secret type plus a fake secret, saves, and asserts where each value landed by reading the
+test home's `config.yaml` and `.env`. It relaunches the shell on the same profile to prove the saved
+values come back. Every step is real input (xdotool clicks and keys); nothing is injected into the
+page and no devtools or WebDriver is used. The flow is a separate script rather than a step in
+`proof.sh` because `proof.sh`'s shot list (01-08) is a published contract other proofs read, and
+this flow needs its own state dir with the fixture installed.
+
+```sh
+scripts/proof-plugin-settings.sh [--bin PATH] [--out DIR] [--port-dir DIR]
+```
+
+`--port-dir` must live under `/tmp/hermes-tauri-test*`. `T18_PROOF_DEBUG=1` also writes
+`debug-*.png` captures of the intermediate steps. The plugin rows on Capabilities > Plugins come
+from `plugins.manage` and land only after the gateway socket has settled, so a run waits up to two
+minutes for the `demo-settings` row rather than failing on the first paint.
+
 ## Provider picker suppression
 
 The UI onboarding flow checks whether any runtime provider is configured:
