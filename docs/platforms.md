@@ -35,11 +35,11 @@ Behaviour that is only exercised on other systems, or under a real desktop sessi
 below. The known cross-cutting limitations are collected in the [README](../README.md#known-limitations).
 
 #### Written but not run (CI Matrix)
-- **CI Runner**: `ubuntu-22.04` ([build.yml:95](../.github/workflows/build.yml#L95))
-- **Target Triple**: `x86_64-unknown-linux-gnu` ([build.yml:96](../.github/workflows/build.yml#L96))
-- **Bundles Configured**: `deb,appimage,rpm` ([build.yml:97](../.github/workflows/build.yml#L97))
-- **Artifact Upload**: Uploaded as `bundle-x86_64-unknown-linux-gnu` ([build.yml:208](../.github/workflows/build.yml#L208)) containing `.deb`, `.rpm`, `.AppImage`, and conditional `.AppImage.sig` ([build.yml:212-215](../.github/workflows/build.yml#L212-L215)).
-- **Code Quality**: Verified in the `check` job via `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, and `cargo test --workspace` ([build.yml:37-42](../.github/workflows/build.yml#L37-L42)).
+- **CI Runner**: `ubuntu-22.04` ([build.yml:96](../.github/workflows/build.yml#L96))
+- **Target Triple**: `x86_64-unknown-linux-gnu` ([build.yml:97](../.github/workflows/build.yml#L97))
+- **Bundles Configured**: `deb,appimage,rpm` ([build.yml:98](../.github/workflows/build.yml#L98))
+- **Artifact Upload**: Uploaded as `bundle-x86_64-unknown-linux-gnu` ([build.yml:209](../.github/workflows/build.yml#L209)) containing `.deb`, `.rpm`, `.AppImage`, and conditional `.AppImage.sig` ([build.yml:213-216](../.github/workflows/build.yml#L213-216)).
+- **Code Quality**: Verified in the `check` job via `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, and `cargo test --workspace` ([build.yml:43-48](../.github/workflows/build.yml#L43-48)).
 
 #### What is left
 1. Complete the Xvfb headless runtime proof (owned by T6/T7) to verify startup, session navigation, WebGL/studio rendering, and memory footprint.
@@ -56,10 +56,10 @@ below. The known cross-cutting limitations are collected in the [README](../READ
 nothing verified yet
 
 #### Written but not run (CI Matrix)
-- **CI Runner**: `ubuntu-22.04-arm` ([build.yml:98](../.github/workflows/build.yml#L98))
-- **Target Triple**: `aarch64-unknown-linux-gnu` ([build.yml:99](../.github/workflows/build.yml#L99))
-- **Bundles Configured**: `deb,appimage` ([build.yml:100](../.github/workflows/build.yml#L100))
-- **Artifact Upload**: Uploaded as `bundle-aarch64-unknown-linux-gnu` ([build.yml:208](../.github/workflows/build.yml#L208)) containing `.deb`, `.AppImage`, and conditional `.AppImage.sig` ([build.yml:212,214-215](../.github/workflows/build.yml#L212-L215)). (RPM is not configured for ARM64).
+- **CI Runner**: `ubuntu-22.04-arm` ([build.yml:99](../.github/workflows/build.yml#L99))
+- **Target Triple**: `aarch64-unknown-linux-gnu` ([build.yml:100](../.github/workflows/build.yml#L100))
+- **Bundles Configured**: `deb,appimage` ([build.yml:101](../.github/workflows/build.yml#L101))
+- **Artifact Upload**: Uploaded as `bundle-aarch64-unknown-linux-gnu` ([build.yml:209](../.github/workflows/build.yml#L209)) containing `.deb`, `.AppImage`, and conditional `.AppImage.sig` ([build.yml:213,215-216](../.github/workflows/build.yml#L213-215-216)). (RPM is not configured for ARM64).
 
 #### What is left
 1. Execute the GitHub Actions workflow on an actual `ubuntu-22.04-arm` runner to verify compilation and packaging of WebKitGTK dependencies on ARM64.
@@ -75,10 +75,10 @@ nothing verified yet
 nothing verified yet
 
 #### Written but not run (CI Matrix)
-- **CI Runner**: `macos-14` (Apple Silicon M1 runner) ([build.yml:101](../.github/workflows/build.yml#L101))
-- **Target Triple**: `aarch64-apple-darwin` ([build.yml:102](../.github/workflows/build.yml#L102))
-- **Bundles Configured**: `app,dmg` ([build.yml:103](../.github/workflows/build.yml#L103))
-- **Artifact Upload**: Uploaded as `bundle-aarch64-apple-darwin` ([build.yml:208](../.github/workflows/build.yml#L208)) containing `.dmg`, `.app.tar.gz`, and conditional `.app.tar.gz.sig` ([build.yml:216-218](../.github/workflows/build.yml#L216-L218)).
+- **CI Runner**: `macos-14` (Apple Silicon M1 runner) ([build.yml:102](../.github/workflows/build.yml#L102))
+- **Target Triple**: `aarch64-apple-darwin` ([build.yml:103](../.github/workflows/build.yml#L103))
+- **Bundles Configured**: `app,dmg` ([build.yml:104](../.github/workflows/build.yml#L104))
+- **Artifact Upload**: Uploaded as `bundle-aarch64-apple-darwin` ([build.yml:209](../.github/workflows/build.yml#L209)) containing `.dmg`, `.app.tar.gz`, and conditional `.app.tar.gz.sig` ([build.yml:217-219](../.github/workflows/build.yml#L217-219)).
 - **Staging Handling**: `scripts/ci/stage-release.sh` renames the updater archive deterministically to `Hermes-Tauri_${VERSION}_aarch64.app.tar.gz` and `.sig` to avoid collision with x64 ([stage-release.sh:115](../scripts/ci/stage-release.sh#L115)).
 
 #### What is left
@@ -96,10 +96,10 @@ nothing verified yet
 nothing verified yet
 
 #### Written but not run (CI Matrix)
-- **CI Runner**: `macos-14` (cross-compiling on Apple Silicon runner) ([build.yml:104](../.github/workflows/build.yml#L104))
-- **Target Triple**: `x86_64-apple-darwin` ([build.yml:105](../.github/workflows/build.yml#L105))
-- **Bundles Configured**: `app,dmg` ([build.yml:106](../.github/workflows/build.yml#L106))
-- **Artifact Upload**: Uploaded as `bundle-x86_64-apple-darwin` ([build.yml:208](../.github/workflows/build.yml#L208)) containing `.dmg`, `.app.tar.gz`, and conditional `.app.tar.gz.sig` ([build.yml:216-218](../.github/workflows/build.yml#L216-L218)).
+- **CI Runner**: `macos-14` (cross-compiling on Apple Silicon runner) ([build.yml:105](../.github/workflows/build.yml#L105))
+- **Target Triple**: `x86_64-apple-darwin` ([build.yml:106](../.github/workflows/build.yml#L106))
+- **Bundles Configured**: `app,dmg` ([build.yml:107](../.github/workflows/build.yml#L107))
+- **Artifact Upload**: Uploaded as `bundle-x86_64-apple-darwin` ([build.yml:209](../.github/workflows/build.yml#L209)) containing `.dmg`, `.app.tar.gz`, and conditional `.app.tar.gz.sig` ([build.yml:217-219](../.github/workflows/build.yml#L217-219)).
 - **Staging Handling**: `scripts/ci/stage-release.sh` renames the updater archive deterministically to `Hermes-Tauri_${VERSION}_x86_64.app.tar.gz` and `.sig` to avoid collision with arm64 ([stage-release.sh:115](../scripts/ci/stage-release.sh#L115)).
 
 #### What is left
@@ -116,12 +116,12 @@ nothing verified yet
 nothing verified yet
 
 #### Written but not run (CI Matrix)
-- **CI Runner**: `windows-latest` ([build.yml:107](../.github/workflows/build.yml#L107))
-- **Target Triple**: `x86_64-pc-windows-msvc` ([build.yml:108](../.github/workflows/build.yml#L108))
-- **Bundles Configured**: `nsis,msi` ([build.yml:109](../.github/workflows/build.yml#L109))
-- **Artifact Upload**: Uploaded as `bundle-x86_64-pc-windows-msvc` ([build.yml:208](../.github/workflows/build.yml#L208)) containing `*-setup.exe`, `*-setup.exe.sig` (conditional), `*.msi`, and `*.msi.sig` (conditional) ([build.yml:219-222](../.github/workflows/build.yml#L219-L222)).
-- **Code Signing**: Currently commented out in [build.yml:154-156](../.github/workflows/build.yml#L154-L156). Builds run unsigned by default.
-- **Code Quality**: The Linux `check` job installs the Windows target and runs `cargo check --all-targets` and `cargo clippy --all-targets` for `hermes-sidecar` and `hermes-shell-config` ([build.yml:48-85](../.github/workflows/build.yml#L48-L85)), so Windows-only code fails CI instead of waiting for this runner. `clippy::result_large_err` is the one lint allowed there, and only there: it fires on Windows for a pre-existing `ConfigError` variant in `hermes-shell-config`.
+- **CI Runner**: `windows-latest` ([build.yml:108](../.github/workflows/build.yml#L108))
+- **Target Triple**: `x86_64-pc-windows-msvc` ([build.yml:109](../.github/workflows/build.yml#L109))
+- **Bundles Configured**: `nsis,msi` ([build.yml:110](../.github/workflows/build.yml#L110))
+- **Artifact Upload**: Uploaded as `bundle-x86_64-pc-windows-msvc` ([build.yml:209](../.github/workflows/build.yml#L209)) containing `*-setup.exe`, `*-setup.exe.sig` (conditional), `*.msi`, and `*.msi.sig` (conditional) ([build.yml:220-223](../.github/workflows/build.yml#L220-223)).
+- **Code Signing**: Currently commented out in [build.yml:155-157](../.github/workflows/build.yml#L155-157). Builds run unsigned by default.
+- **Code Quality**: The Linux `check` job installs the Windows target and runs `cargo check --all-targets` and `cargo clippy --all-targets -D warnings` for `hermes-sidecar` and `hermes-shell-config` ([build.yml:57-86](../.github/workflows/build.yml#L57-86)), so Windows-only code fails CI instead of waiting for this runner. No lint is allowed there: the one that used to be (`clippy::result_large_err` for `ConfigError::ConfigFile`) is fixed by boxing that error's `toml::de::Error`.
 
 #### Fixed since the R7 audit (compile-checked, never run)
 The R7 audit found that no `cfg(windows)` code had ever been compiled. These are fixed; all of them are type-checked for `x86_64-pc-windows-msvc` and none has been executed:
