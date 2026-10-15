@@ -4,19 +4,22 @@
 all runtime state is isolated under `/tmp/hermes-tauri-test`. The script selects a free loopback
 port in `18800–18899`, waits for `/api/health`, and prints only the server origin.
 
+`HERMES_TAURI_PIN` sets the Hermes checkout to run. It must be an absolute path to a checkout that
+contains `hermes` and a built `apps/desktop/dist-webapp`. When it is unset, the script uses a
+`_hermes-pin` directory next to the repository root, which resolves only when the working directory
+is a worktree beside `_hermes-pin`; every example below sets it explicitly. If it resolves to
+nothing, `start` stops with an error that names the path it tried.
+
 Set `HERMES_TAURI_TEST_DIR` to use a separate instance directory, for example:
 
 ```sh
-HERMES_TAURI_TEST_DIR=/tmp/hermes-tauri-test-t2b scripts/test-hermes.sh start
-HERMES_TAURI_TEST_DIR=/tmp/hermes-tauri-test-t2b scripts/test-hermes.sh status
-HERMES_TAURI_TEST_DIR=/tmp/hermes-tauri-test-t2b scripts/test-hermes.sh stop
-HERMES_TAURI_TEST_DIR=/tmp/hermes-tauri-test-t2b scripts/test-hermes.sh reset
+export HERMES_TAURI_PIN="/path/to/hermes-checkout"
+export HERMES_TAURI_TEST_DIR=/tmp/hermes-tauri-test-demo
+scripts/test-hermes.sh start
+scripts/test-hermes.sh status
+scripts/test-hermes.sh stop
+scripts/test-hermes.sh reset
 ```
-
-`HERMES_TAURI_PIN` sets the Hermes checkout to run. It must be an absolute path to a checkout that
-contains `hermes` and a built `apps/desktop/dist-webapp`. When it is unset, the script uses a
-`_hermes-pin` directory next to the repository root. If neither exists, `start` stops with an error
-that names the path it tried.
 
 The override controls the pid, launch link, logs, and all runtime directories. It must resolve to
 `/tmp/hermes-tauri-test`, a sibling whose name starts with `/tmp/hermes-tauri-test-`, or a child
@@ -25,8 +28,10 @@ the selected directory. Each instance checks the listening ports before choosing
 instance is skipped by the next start.
 
 Use `status` to check health, `url` to retrieve the private launch link, and `cmd` to print the
-shell-escaped `HERMES_TAURI_CMD` assignment. The launch link is stored with mode `0600`; do not
-paste it into logs or reports. `verify-isolation` inspects every process in the managed server
+backend command as the JSON argv array that `HERMES_TAURI_CMD` expects, for example
+`HERMES_TAURI_CMD="$(scripts/test-hermes.sh cmd 18810)" hermes-tauri`. The printed array holds no
+launch link or session token. The launch link is stored with mode `0600`; do not paste it into logs
+or reports. `verify-isolation` inspects every process in the managed server
 group, prints only `HOME`, `HERMES_HOME`, and `HERMES_RUNTIME_DIR`, and lists any open descriptors
 under the real Hermes home with their access mode and a relative path. It fails on unexpected
 environment values or any writable descriptor there; read-only interpreter/library descriptors
@@ -41,6 +46,8 @@ not apply. It does not install or alter Python dependencies.
 Two independent instances can run concurrently on separate state directories and separate ports:
 
 ```sh
+export HERMES_TAURI_PIN="/path/to/hermes-checkout"
+
 # Start instance 1 (default state dir)
 scripts/test-hermes.sh start 18800
 # -> http://127.0.0.1:18800

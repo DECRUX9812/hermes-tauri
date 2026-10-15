@@ -9,7 +9,30 @@ This document defines the implementation, verification status, known behaviors, 
 ### 1. Linux x86_64 (`x86_64-unknown-linux-gnu`)
 
 #### Verified on the dev workstation
-<!-- T7 fills in after the Xvfb proof -->
+Verified on the Linux x86_64 dev workstation with WebKitGTK 4.1 `2.52.6`, under
+`dbus-run-session -- xvfb-run -a -s "-screen 0 1440x900x24"`, against an isolated test Hermes on
+ports 18800-18899:
+
+- **Build**: a release binary and `deb`/`appimage` bundles have been produced here with
+  `scripts/builder.sh` (the container has the GTK/WebKitGTK `-dev` headers); the CI `check` job runs
+  `cargo fmt --check`, clippy, and the tests with `--locked`.
+- **Attach mode**: `hermes-tauri --url <launch link>` connects (`Hermes backend ready at
+  http://127.0.0.1:18800`), shows the tray, registers the hotkey, logs `Updates not configured`,
+  and exits cleanly on `SIGTERM` (`Hermes backend stopped: Detached`).
+- **Spawn mode**: `HERMES_TAURI_CMD` (a JSON argv array) starts the backend, the shell waits for
+  health before navigating, and on exit the whole process group is terminated (the port is freed;
+  confirmed with `ss`).
+- **Native overlays**: the tray icon, the `CommandOrControl+Shift+Space` global hotkey, and the
+  origin-scoped `hermesDesktop` bridge (`notify`, `openExternal`, `selectPaths`) initialise.
+  Deep-link parsing is covered by the crate's unit tests; live `hermes-tauri://` activation was not
+  sent in these runs.
+- **Rendering**: the boot, home, team, kanban, studio, and settings routes render without console or
+  page errors under WebKitGTK 2.52.6, matching Chromium ([docs/webkit-compat.md](webkit-compat.md)).
+- **Measurements**: size, idle RAM, and startup figures are in
+  [docs/measurements.md](measurements.md), measured with the T1 build.
+
+Behaviour that is only exercised on other systems, or under a real desktop session, is described
+below. The known cross-cutting limitations are collected in the [README](../README.md#known-limitations).
 
 #### Written but not run (CI Matrix)
 - **CI Runner**: `ubuntu-22.04` ([build.yml:52](../.github/workflows/build.yml#L52))
