@@ -6,171 +6,179 @@ This document describes the GitHub Actions workflow for building the Hermes Taur
 
 ## Workflow: `.github/workflows/build.yml`
 
+### Top-Level Configuration
+- **Workflow Name**: `Build`
+- **Permissions**: `contents: read` (scoped globally, elevated to `contents: write` only within the release job)
+- **Triggers**:
+  - `push` to `master`
+  - Tag creation matching `v*`
+  - `pull_request` against all branches
+  - `workflow_dispatch` (manual trigger)
+
+---
+
 ### Jobs
 
-#### 1. `check` (ubuntu-22.04)
-Runs code quality checks on every push, PR, and tag:
-- **Formatting**: `cargo fmt --all -- --check`
-- **Linting**: `cargo clippy --workspace --all-targets -- -D warnings`
-- **Tests**: `cargo test --workspace`
+#### 1. `check` (`ubuntu-22.04`)
+Runs code quality and verification checks on every push, PR, and tag:
+- **System Dependencies**: Installs Tauri Linux build libraries via `apt-get`:
+  - `libwebkit2gtk-4.1-dev`
+  - `libgtk-3-dev`
+  - `libayatana-appindicator3-dev`
+  - `librsvg2-dev`
+  - `libxdo-dev`
+  - `libssl-dev`
+  - `patchelf`
+- **Rust Toolchain**: `dtolnay/rust-toolchain@stable` with components `rustfmt` and `clippy`.
+- **Caching**: `Swatinem/rust-cache@v2`.
+- **Quality Checks**:
+  - Formatting: `cargo fmt --all -- --check`
+  - Linting: `cargo clippy --workspace --all-targets -- -D warnings`
+  - Test Suite: `cargo test --workspace`
 
-Installs Tauri Linux dependencies: `libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, `libayatana-appindicator3-dev`, `librsvg2-dev`, `libxdo-dev`, `libssl-dev`, `patchelf`.
+---
 
-Uses `dtolnay/rust-toolchain@stable` with `rustfmt` and `clippy` components, and `Swatinem/rust-cache@v2` for dependency caching.
+#### 2. `build` (Matrix, `needs: check`)
+Compiles the application across the target operating system matrix.
+- **Fail-Fast**: Disabled (`fail-fast: false`), ensuring that a failure on one target does not cancel builds on other platforms.
+- **Tauri Action**: Uses `tauri-apps/tauri-action@v0` with `tauriScript: cargo tauri`.
 
-#### 2. `build` (matrix, needs: check)
-Builds the Tauri application for multiple targets. Uses `tauri-apps/tauri-action@v0` (chosen over manual `cargo install tauri-cli` because it handles cross-compilation setup, tauri-cli installation, and signing integration in a single maintained action).
+##### Matrix Configuration
 
-| Platform | Runner | Target | Bundles |
-|----------|--------|--------|---------|
-| Linux x64 | ubuntu-22.04 | x86_64-unknown-linux-gnu | deb, appimage, rpm |
-| Linux ARM64 | ubuntu-22.04-arm | aarch64-unknown-linux-gnu | deb, appimage |
-| macOS ARM64 | macos-14 | aarch64-apple-darwin | app, dmg |
-| macOS x64 (cross) | macos-14 | x86_64-apple-darwin | app, dmg |
-| Windows x64 | windows-latest | x86_64-pc-windows-msvc | nsis, msi |
+| Platform | Runner OS | Target Triple | Configured Bundles |
+|----------|-----------|---------------|--------------------|
+| Linux x86_64 | `ubuntu-22.04` | `x86_64-unknown-linux-gnu` | `deb,appimage,rpm` |
+| Linux ARM64 | `ubuntu-22.04-arm` | `aarch64-unknown-linux-gnu` | `deb,appimage` |
+| macOS ARM64 | `macos-14` | `aarch64-apple-darwin` | `app,dmg` |
+| macOS x64 (Cross) | `macos-14` | `x86_64-apple-darwin` | `app,dmg` |
+| Windows x64 | `windows-latest` | `x86_64-pc-windows-msvc` | `nsis,msi` |
 
-**Fail-fast: false** — one platform failure doesn't cancel others.
+##### Signing Environment Preparation
+The `Prepare signing environment` step selectively exports signing secrets to `$GITHUB_ENV` to prevent empty variables from causing `tauri-action` to fail:
+- Single-line secrets are written only when set and non-empty:
+  - `APPLE_CERTIFICATE_PASSWORD`
+  - `APPLE_SIGNING_IDENTITY`
+  - `APPLE_ID`
+  - `APPLE_PASSWORD`
+  - `APPLE_TEAM_ID`
+  - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
+- Multiline secrets (`APPLE_CERTIFICATE`, `TAURI_SIGNING_PRIVATE_KEY`) are exported using a heredoc with a randomized boundary delimiter (`EOF_$(openssl rand -hex 8)`), preventing payload text from truncating the block.
+- When `TAURI_SIGNING_PRIVATE_KEY` is present and non-empty, the step generates an updater configuration snippet at `$RUNNER_TEMP/updater.conf.json` with `{"bundle":{"createUpdaterArtifacts":true}}` and passes `--config $RUNNER_TEMP/updater.conf.json` to the build args. When unset, no updater artifacts or `.sig` signatures are generated.
 
-**Signing environment**: A dedicated step (`Prepare signing environment`) writes only non-empty secrets to `$GITHUB_ENV`. This avoids passing empty vars (e.g., `TAURI_SIGNING_PRIVATE_KEY=`) which would make `tauri-action` attempt signing and fail. The step uses heredoc with a **random delimiter** (`EOF_<random>`) for multiline secrets (`APPLE_CERTIFICATE`, `TAURI_SIGNING_PRIVATE_KEY`) so a secret value can never accidentally end the heredoc block early. When `TAURI_SIGNING_PRIVATE_KEY` is present, the step writes a config file `$RUNNER_TEMP/updater.conf.json` with `{"bundle":{"createUpdaterArtifacts":true}}` and outputs `--config $RUNNER_TEMP/updater.conf.json` so the build includes `.sig` files for the updater. This avoids shell-quoted JSON in command args.
+##### Artifact Uploads
+Each matrix runner uploads its deliverable outputs using `actions/upload-artifact@v4` under a unique artifact name `bundle-${{ matrix.target }}` with 7-day retention (`retention-days: 7`) and `if-no-files-found: error`.
 
-Artifacts uploaded: `target/<target>/release/bundle/**` (one artifact per matrix entry).
+Explicit globs are used so that intermediate packaging directories (such as `AppDir/`, `.app/Contents/`, or `DEBIAN/`) are excluded:
 
-#### 3. `release` (needs: build, only on `v*` tags)
-Creates a **draft** GitHub release (never auto-published):
-- Downloads all build artifacts
-- Stages artifacts and generates `latest.json` for the Tauri v2 updater via `scripts/ci/stage-release.sh` **only when `.sig` files exist** (i.e., when signing secrets are configured). The script:
-  - Reads artifacts from the `artifacts/` directory (one subdirectory per matrix entry: `bundle-<rust-target>/`)
-  - Determines platform from the artifact directory name (`bundle-<rust-target>`), not from filenames. Maps:
-    - `x86_64-unknown-linux-gnu` → `linux-x86_64`
-    - `aarch64-unknown-linux-gnu` → `linux-aarch64`
-    - `aarch64-apple-darwin` → `darwin-aarch64`
-    - `x86_64-apple-darwin` → `darwin-x86_64`
-    - `x86_64-pc-windows-msvc` → `windows-x86_64`
-  - Selects the primary updater bundle per platform: `.AppImage` for Linux, `.app.tar.gz` for macOS, `*_x64-setup.exe` (NSIS) for Windows
-  - Stages all files into a flat `dist-release/` directory with deterministic names:
-    - Spaces replaced with dashes
-    - macOS updater tarballs renamed to `Hermes-Tauri_<version>_<aarch64|x86_64>.app.tar.gz` (and `.sig`) to avoid collision between arm64 and x64 builds
-    - Fails with a clear error if any staged names still collide
-  - Reads signatures from `.sig` files (whitespace trimmed)
-  - Produces Tauri v2 format: `{"version","notes","pub_date","platforms":{"<os>-<arch>":{"signature":"...","url":"..."}}}`
-  - URLs use the **staged filenames** (URL-encoded)
-  - Verifies every URL's basename exists in `dist-release/`
-  - Skips generation entirely (with a log line, exits 0) when no `.sig` files are found
-- Uploads all staged files from `dist-release/*` as release assets
-- Uses `contents: write` permission scoped to this job only (top-level is `contents: read`)
+| Matrix Target | Upload Artifact Name | Uploaded Deliverable Files |
+|---------------|----------------------|----------------------------|
+| `x86_64-unknown-linux-gnu` | `bundle-x86_64-unknown-linux-gnu` | `target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb`<br>`target/x86_64-unknown-linux-gnu/release/bundle/rpm/*.rpm`<br>`target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage`<br>`target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage.sig` (when signed) |
+| `aarch64-unknown-linux-gnu` | `bundle-aarch64-unknown-linux-gnu` | `target/aarch64-unknown-linux-gnu/release/bundle/deb/*.deb`<br>`target/aarch64-unknown-linux-gnu/release/bundle/appimage/*.AppImage`<br>`target/aarch64-unknown-linux-gnu/release/bundle/appimage/*.AppImage.sig` (when signed) |
+| `aarch64-apple-darwin` | `bundle-aarch64-apple-darwin` | `target/aarch64-apple-darwin/release/bundle/dmg/*.dmg`<br>`target/aarch64-apple-darwin/release/bundle/macos/*.app.tar.gz`<br>`target/aarch64-apple-darwin/release/bundle/macos/*.app.tar.gz.sig` (when signed) |
+| `x86_64-apple-darwin` | `bundle-x86_64-apple-darwin` | `target/x86_64-apple-darwin/release/bundle/dmg/*.dmg`<br>`target/x86_64-apple-darwin/release/bundle/macos/*.app.tar.gz`<br>`target/x86_64-apple-darwin/release/bundle/macos/*.app.tar.gz.sig` (when signed) |
+| `x86_64-pc-windows-msvc` | `bundle-x86_64-pc-windows-msvc` | `target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.exe`<br>`target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.exe.sig` (when signed)<br>`target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi`<br>`target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi.sig` (when signed) |
 
-## Secrets
+---
 
-| Secret | Purpose | Required |
-|--------|---------|----------|
-| `APPLE_CERTIFICATE` | macOS Developer ID Application certificate (base64) | No |
-| `APPLE_CERTIFICATE_PASSWORD` | Certificate password | No |
-| `APPLE_SIGNING_IDENTITY` | Signing identity name (e.g., "Developer ID Application: Name (TEAMID)") | No |
-| `APPLE_ID` | Apple ID for notarization | No |
-| `APPLE_PASSWORD` | App-specific password for notarization | No |
-| `APPLE_TEAM_ID` | Apple Team ID | No |
-| `WINDOWS_CERTIFICATE` | Windows code signing certificate (PFX, base64) — or use Azure Trusted Signing | No |
-| `WINDOWS_CERTIFICATE_PASSWORD` | Certificate password | No |
-| `TAURI_SIGNING_PRIVATE_KEY` | Minisign private key for updater signatures | No |
-| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Minisign key password | No |
+#### 3. `release` (`needs: build`, Tagged `v*` Only)
+Triggered only when the Git reference starts with `refs/tags/v`:
+- **Runner**: `ubuntu-22.04`
+- **Permissions**: `contents: write`
+- **Artifact Download**: Downloads all build artifacts into `artifacts/` via `actions/download-artifact@v4` with `pattern: bundle-*` and `merge-multiple: false`. This places outputs in `artifacts/bundle-<target>/<bundle-type>/<file>`.
+- **Staging & Manifest Generation**: Executes `bash scripts/ci/stage-release.sh`.
+- **Draft GitHub Release**: Publishes a **draft** release containing all files staged in `dist-release/*` using `softprops/action-gh-release@v2`. Releases remain draft until reviewed and published manually.
 
-**Important**: The workflow does not pass empty signing env vars to `tauri-action`. If secrets are unset, the build succeeds **unsigned**. Setting an empty secret would trigger a signing attempt and fail.
+---
 
-### Windows Signing Note
-For Windows, you can use either:
-- Traditional code signing certificate (`WINDOWS_CERTIFICATE` + `WINDOWS_CERTIFICATE_PASSWORD`)
-- **Azure Trusted Signing** (recommended): Configure via `AZURE_TRUSTED_SIGNING_*` secrets (not in this workflow; add when ready)
+## Secrets Reference
 
-## scripts/ci/stage-release.sh
+The workflow references the following secrets by name:
 
-Generates the Tauri v2 updater `latest.json` from downloaded artifacts and stages files for release.
+| Secret Name | Scope & Effect |
+|-------------|----------------|
+| `APPLE_CERTIFICATE` | Base64-encoded Apple Developer ID Application certificate (`.p12`). Required for macOS code signing. |
+| `APPLE_CERTIFICATE_PASSWORD` | Passphrase to decrypt `APPLE_CERTIFICATE`. |
+| `APPLE_SIGNING_IDENTITY` | Full identity string matching Keychain (e.g. `Developer ID Application: Team Name (TEAMID)`). |
+| `APPLE_ID` | Apple ID email address used by notarytool for notarization. |
+| `APPLE_PASSWORD` | App-specific password generated for `APPLE_ID`. |
+| `APPLE_TEAM_ID` | 10-character Apple Developer Team ID. |
+| `TAURI_SIGNING_PRIVATE_KEY` | Minisign private key string. When present, enables `createUpdaterArtifacts` and generates `.sig` signature files. |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Passphrase protecting `TAURI_SIGNING_PRIVATE_KEY`. |
+| `GITHUB_TOKEN` | Standard GitHub Actions token, used by `action-gh-release` to create draft releases. |
 
-**Inputs** (environment variables):
-- `GITHUB_REPOSITORY` — e.g., `owner/repo`
-- `GITHUB_REF_NAME` — e.g., `v0.1.0` (the tag name)
-- `ARTIFACTS_DIR` — directory containing downloaded artifacts (default: `artifacts`)
+*Note on Windows Code Signing*: `WINDOWS_CERTIFICATE` and `WINDOWS_CERTIFICATE_PASSWORD` (or Azure Trusted Signing) are noted in `build.yml` comments but are not yet enabled in the step env block. Windows builds currently proceed unsigned.
 
-**Behavior**:
-1. Finds all `bundle-<rust-target>/` directories under `ARTIFACTS_DIR`
-2. Maps each directory to a platform key using the rust target
-3. Collects all files recursively from each bundle directory
-4. For each platform, selects the highest-priority bundle with a `.sig`:
-   - Linux (x86_64, aarch64): `.AppImage` (primary) > `.deb`/`.rpm`
-   - macOS (aarch64, x86_64): `.app.tar.gz` (primary) > `.dmg`
-   - Windows (x86_64): `*_x64-setup.exe` NSIS installer (primary) > `.msi`
-5. Computes deterministic staged names:
-   - All files: spaces replaced with dashes
-   - macOS updater bundle (`.app.tar.gz`) and its `.sig`: renamed to `Hermes-Tauri_<version>_<arch>.app.tar.gz(.sig)`
-6. Checks for collisions in staged names; fails with clear error if any
-7. Copies all files to `dist-release/`
-8. If no `.sig` files found: logs "No .sig files found — skipping latest.json generation (unsigned build)", lists `dist-release/`, exits 0
-9. Generates `dist-release/latest.json` using staged names in URLs (URL-encoded via `jq @uri`)
-10. Verifies each URL's basename exists in `dist-release/`
+If signing secrets are absent, the workflow completes an **unsigned build** without errors.
 
-**Testing locally**:
+---
+
+## Staging Script: `scripts/ci/stage-release.sh`
+
+The staging script bridges raw build artifacts to published release assets and the Tauri v2 updater manifest:
+
+### Execution Flow
+1. **Validation & Preparation**:
+   - Ensures `GITHUB_REPOSITORY` and `GITHUB_REF_NAME` are set.
+   - Cleans and creates `dist-release/`.
+2. **Platform Mapping**:
+   - Matches directories under `artifacts/bundle-*` to platform targets:
+     - `x86_64-unknown-linux-gnu` &rarr; `linux-x86_64`
+     - `aarch64-unknown-linux-gnu` &rarr; `linux-aarch64`
+     - `aarch64-apple-darwin` &rarr; `darwin-aarch64`
+     - `x86_64-apple-darwin` &rarr; `darwin-x86_64`
+     - `x86_64-pc-windows-msvc` &rarr; `windows-x86_64`
+3. **Deliverable Filtering**:
+   - Inspects files at exactly depth 2 (`bundle_dir/<bundle-type>/<file>`).
+   - Filters by allowed deliverable extensions: `.deb`, `.rpm`, `.AppImage`, `.AppImage.sig`, `.dmg`, `.app.tar.gz`, `.app.tar.gz.sig`, `*-setup.exe`, `*-setup.exe.sig`, `.msi`, `.msi.sig`.
+4. **Updater Bundle Selection**:
+   - Identifies the preferred updater bundle per platform (`PLATFORM_PREFERRED`):
+     - `linux-x86_64`: `AppImage`
+     - `linux-aarch64`: `AppImage`
+     - `darwin-aarch64`: `app.tar.gz`
+     - `darwin-x86_64`: `app.tar.gz`
+     - `windows-x86_64`: `setup.exe`
+   - If a corresponding `.sig` signature exists for the preferred bundle, the bundle and signature are registered for the updater feed.
+5. **Deterministic Renaming & Staging**:
+   - Spaces in all filenames are replaced with dashes (`${basename_file// /-}`).
+   - macOS updater archives and signatures are renamed to include the target architecture:
+     `Hermes-Tauri_${VERSION}_${arch}.app.tar.gz` and `Hermes-Tauri_${VERSION}_${arch}.app.tar.gz.sig` (where `arch` is `aarch64` or `x86_64`), preventing cross-architecture file collisions in the flat `dist-release/` directory.
+   - Verifies there are no name collisions in `dist-release/`.
+   - Copies files into `dist-release/`.
+6. **Updater `latest.json` Generation**:
+   - If no `.sig` files exist across any platform (`sig_count == 0`), the script logs that it is an unsigned build, lists staged assets, and exits 0 without writing `latest.json`.
+   - If signatures exist, generates `dist-release/latest.json` adhering to the Tauri v2 schema (`version`, `notes`, `pub_date`, and `platforms` dictionary).
+   - Validates that every platform asset URL points to a staged file present in `dist-release/`.
+
+### Local Testing
+
+To test staging locally without a full build matrix:
+
 ```bash
-# With fake artifacts (creates test files in .oc/tmp/fake-artifacts/)
-mkdir -p .oc/tmp/fake-artifacts/bundle-x86_64-unknown-linux-gnu
-touch .oc/tmp/fake-artifacts/bundle-x86_64-unknown-linux-gnu/app.AppImage
-echo "testsig" > .oc/tmp/fake-artifacts/bundle-x86_64-unknown-linux-gnu/app.AppImage.sig
+# Set up mock depth-2 artifact structure
+mkdir -p .oc/tmp/fake-artifacts/bundle-x86_64-unknown-linux-gnu/appimage
+touch .oc/tmp/fake-artifacts/bundle-x86_64-unknown-linux-gnu/appimage/Hermes-Tauri_0.1.0_amd64.AppImage
+echo "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZQ==" > .oc/tmp/fake-artifacts/bundle-x86_64-unknown-linux-gnu/appimage/Hermes-Tauri_0.1.0_amd64.AppImage.sig
 
+# Run staging script
 GITHUB_REPOSITORY="owner/repo" GITHUB_REF_NAME="v0.1.0" \
 ARTIFACTS_DIR=".oc/tmp/fake-artifacts" bash scripts/ci/stage-release.sh
-# → prints generated JSON, lists staged files, verifies URLs
 
-# Empty dir (unsigned build)
+# Unsigned build test (empty directory)
 mkdir -p .oc/tmp/empty-artifacts
 GITHUB_REPOSITORY="owner/repo" GITHUB_REF_NAME="v0.1.0" \
 ARTIFACTS_DIR=".oc/tmp/empty-artifacts" bash scripts/ci/stage-release.sh
-# → "No .sig files found ... — skipping latest.json generation"
 ```
 
-## Per-Platform Notes
+---
 
-### Linux (ubuntu-22.04)
-- **WebKitGTK version floor**: Ubuntu 22.04 ships WebKitGTK 2.41+. The app sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` at runtime to avoid DMABUF renderer issues on NVIDIA and in headless/Xvfb environments.
-- **AppImage limitation**: AppImage cannot bundle WebKitGTK cleanly (it links the host's). The AppImage will only run on distros with compatible WebKitGTK.
-- **Deb/RPM**: These packages cannot self-update via Tauri updater (same as Electron). Users must use their package manager.
+## Release Process
 
-### macOS (macos-14)
-- **Notarization**: Requires all Apple secrets (`APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`, certificate). Without them, the `.app` and `.dmg` are built but not notarized.
-- **Universal binaries**: Not configured. The matrix builds arm64 and x64 separately. Use `lipo` to combine if needed.
-- **Hardened Runtime**: Enabled by Tauri v2. Entitlements are in `src-tauri/Entitlements.plist`.
-
-### Windows (windows-latest)
-- **WebView2**: The `windows-latest` runner includes the WebView2 bootstrapper. The NSIS/MSI installers will install WebView2 if missing on the target machine.
-- **Signing**: Requires `WINDOWS_CERTIFICATE` (PFX) or Azure Trusted Signing. Without signing, Windows SmartScreen will warn users.
-
-## How to Cut a Release
-
-1. Ensure all desired changes are on `master`
-2. Create and push a version tag:
+1. Merge approved changes into `master`.
+2. Create and push a semver tag:
    ```bash
    git tag v0.1.0
    git push origin v0.1.0
    ```
-3. The `build` job runs for all platforms; the `release` job creates a **draft** release
-4. Go to GitHub Releases, review the draft, verify assets, then **Publish release**
-5. The Tauri updater will pick up the published release (if `latest.json` was generated with signatures)
-
-## Local Development
-
-```bash
-# Install Tauri CLI
-cargo install tauri-cli --version '^2' --locked
-
-# Build for current platform
-cargo tauri build
-
-# Build for specific target (requires cross-compilation setup)
-cargo tauri build --target x86_64-unknown-linux-gnu --bundles deb,appimage,rpm
-```
-
-## Troubleshooting
-
-- **Linux build fails with WebKitGTK errors**: Ensure all `-dev` packages are installed. The workflow installs them automatically.
-- **macOS codesign fails**: Verify certificate is a "Developer ID Application" cert, not "Mac App Store". Check `APPLE_SIGNING_IDENTITY` matches the cert's common name.
-- **Windows build fails**: Ensure `patchelf` equivalent isn't needed; WebView2 bootstrapper is on the runner.
-- **Updater `latest.json` missing**: This is expected if no signing keys are configured. The updater only works with signed releases.
-- **Release job fails with collision error**: Two artifacts would have the same staged name. Check that macOS `.app.tar.gz` files from different architectures are being renamed correctly.
-- **URL verification fails**: The staged filename doesn't match the URL. Ensure `stage-release.sh` uses the same staged name for both the file and the URL.
+3. The `check` and `build` jobs compile all target binaries and upload artifacts.
+4. The `release` job stages files, generates `latest.json` (if signing is enabled), and creates a draft release on GitHub.
+5. Inspect the draft release on GitHub, verify the deliverables, and click **Publish Release**.
