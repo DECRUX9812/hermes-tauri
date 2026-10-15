@@ -1,5 +1,6 @@
 use std::io;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::Arc;
 use std::thread;
@@ -21,12 +22,41 @@ const BACKOFF_START: Duration = Duration::from_millis(50);
 const BACKOFF_MAX: Duration = Duration::from_millis(500);
 const EXIT_DRAIN: Duration = Duration::from_millis(500);
 
+/// A cooperative stop signal for [`connect_with_cancel`]. The shell sets it
+/// when the user quits while a connection attempt is still running, so the
+/// spawned process group is killed instead of orphaned.
+#[derive(Clone, Default)]
+pub struct Cancel(Arc<AtomicBool>);
+
+impl Cancel {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn cancel(&self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::SeqCst)
+    }
+}
+
 /// Attaches to `attach_url` when it answers, otherwise spawns `command` if allowed.
 ///
 /// Blocking: run it on a background thread. `on_phase` is called from that thread.
-pub fn connect(
+pub fn connect(cfg: &SidecarConfig, on_phase: impl FnMut(Phase)) -> Result<Backend, SidecarError> {
+    connect_with_cancel(cfg, on_phase, &Cancel::default())
+}
+
+/// [`connect`] with a stop signal. When `cancel` fires, the attempt returns
+/// [`SidecarError::Cancelled`] and a spawned process group is killed (the
+/// `Process` is dropped). A cancelled attach attempt never touches the
+/// running server.
+pub fn connect_with_cancel(
     cfg: &SidecarConfig,
     mut on_phase: impl FnMut(Phase),
+    cancel: &Cancel,
 ) -> Result<Backend, SidecarError> {
     let agent = ureq::AgentBuilder::new().try_proxy_from_env(false).build();
     let attached_origin = match &cfg.attach_url {
@@ -46,19 +76,24 @@ pub fn connect(
         None => None,
     };
 
+    if cancel.is_cancelled() {
+        return Err(SidecarError::Cancelled);
+    }
+
     if !cfg.spawn_if_unreachable {
         return Err(match attached_origin {
             Some(origin) => SidecarError::Unreachable { origin },
             None => SidecarError::NothingToConnect,
         });
     }
-    spawn(cfg, &agent, &mut on_phase)
+    spawn(cfg, &agent, &mut on_phase, cancel)
 }
 
 fn spawn(
     cfg: &SidecarConfig,
     agent: &ureq::Agent,
     on_phase: &mut impl FnMut(Phase),
+    cancel: &Cancel,
 ) -> Result<Backend, SidecarError> {
     let (program, args) = cfg.command.split_first().ok_or(SidecarError::NoCommand)?;
     on_phase(Phase::Spawning {
@@ -98,6 +133,7 @@ fn spawn(
         links,
         eof,
         ready_timeout: cfg.ready_timeout,
+        cancel: cancel.clone(),
     };
     let deadline = Instant::now() + cfg.ready_timeout;
 
@@ -119,6 +155,7 @@ struct Watch {
     links: Receiver<LaunchLink>,
     eof: Receiver<()>,
     ready_timeout: Duration,
+    cancel: Cancel,
 }
 
 impl Watch {
@@ -128,6 +165,9 @@ impl Watch {
         deadline: Instant,
     ) -> Result<LaunchLink, SidecarError> {
         loop {
+            if self.cancel.is_cancelled() {
+                return Err(SidecarError::Cancelled);
+            }
             if process.poll_exit()?.is_some() {
                 return Err(self.exited(process.exit_code()));
             }
@@ -151,6 +191,9 @@ impl Watch {
     ) -> Result<(), SidecarError> {
         let mut backoff = BACKOFF_START;
         loop {
+            if self.cancel.is_cancelled() {
+                return Err(SidecarError::Cancelled);
+            }
             if process.poll_exit()?.is_some() {
                 return Err(self.exited(process.exit_code()));
             }

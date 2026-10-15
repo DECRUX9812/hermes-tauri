@@ -42,6 +42,8 @@ pub enum SidecarError {
     },
     #[error("Hermes (pid {pid}) is still running after SIGKILL")]
     StillRunning { pid: u32 },
+    #[error("The connection attempt was cancelled")]
+    Cancelled,
 }
 
 fn exit_text(code: &Option<i32>) -> String {

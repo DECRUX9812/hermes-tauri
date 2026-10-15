@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-native-select-paths"
+description = "Enables the native_select_paths command without any pre-configured scope."
+commands.allow = ["native_select_paths"]
+
+[[permission]]
+identifier = "deny-native-select-paths"
+description = "Denies the native_select_paths command without any pre-configured scope."
+commands.deny = ["native_select_paths"]

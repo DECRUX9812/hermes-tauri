@@ -1,6 +1,11 @@
 (() => {
-  const backendOrigin = __HERMES_BACKEND_ORIGIN__;
-  if (location.origin !== backendOrigin) return;
+  // Runs on every page the webview loads. In SPAWN mode the backend origin
+  // (port 0) is unknown when the window is built, so the adapter cannot be
+  // scoped by origin here. The real IPC boundary is the runtime capability,
+  // which is granted to the exact backend origin after connect resolves, and
+  // the navigation guard keeps every other origin out of this webview. The
+  // adapter therefore only overlays on http(s) pages, never on the boot page.
+  if (location.protocol !== 'http:' && location.protocol !== 'https:') return;
 
   const tauri = window.__TAURI__;
   if (!tauri?.core?.invoke) return;
@@ -33,6 +38,47 @@
       return false;
     }
   };
+  const nativeSelectPaths = async options => {
+    try {
+      return await tauri.core.invoke('native_select_paths', {
+        options: options && typeof options === 'object' ? options : {}
+      });
+    } catch {
+      return [];
+    }
+  };
+
+  // WebKitGTK has no default reload accelerator (Electron reloads on F5 and
+  // Ctrl/Cmd+R). Reload pages of the backend UI only: the session token the
+  // bootstrap consumed lives in sessionStorage (`hermes.webapp.session.*`,
+  // written by the UI on the backend origin), so its presence identifies a
+  // page where reloading keeps an authenticated session. Never reload a
+  // foreign page, and never during IME composition or while the key auto-
+  // repeats (review F5, F6).
+  const canReload = () => {
+    if (location.protocol !== 'http:' && location.protocol !== 'https:') return false;
+    try {
+      for (let i = 0; i < sessionStorage.length; i++) {
+        if (sessionStorage.key(i).startsWith('hermes.webapp.session')) return true;
+      }
+    } catch {}
+    return false;
+  };
+  window.addEventListener(
+    'keydown',
+    event => {
+      if (event.repeat) return;
+      if (event.isComposing || event.keyCode === 229) return;
+      const reload =
+        event.key === 'F5' ||
+        ((event.ctrlKey || event.metaKey) && (event.key === 'r' || event.key === 'R'));
+      if (reload && canReload()) {
+        event.preventDefault();
+        location.reload();
+      }
+    },
+    { capture: true }
+  );
 
   let installedBridge;
   Object.defineProperty(window, 'hermesDesktop', {
@@ -46,6 +92,7 @@
       if (bridge && typeof bridge === 'object') {
         bridge.openExternal = nativeOpenExternal;
         bridge.notify = nativeNotify;
+        bridge.selectPaths = nativeSelectPaths;
       }
       Object.defineProperty(window, 'hermesDesktop', {
         configurable: true,

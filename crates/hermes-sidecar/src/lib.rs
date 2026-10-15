@@ -14,7 +14,7 @@ mod process;
 
 pub use backend::{Backend, ShutdownReport};
 pub use config::SidecarConfig;
-pub use connect::connect;
+pub use connect::{connect, connect_with_cancel, Cancel};
 pub use error::SidecarError;
 pub use launch_link::{is_attach_url, redact};
 pub use phase::Phase;

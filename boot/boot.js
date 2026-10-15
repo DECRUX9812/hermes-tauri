@@ -10,28 +10,44 @@
     error.hidden = true;
     error.textContent = '';
 
-    if (state.phase === 'no_config') {
-      headline.textContent = 'No Hermes configured';
-      detail.textContent = 'Pass --url or set HERMES_TAURI_URL to connect to a Hermes server.';
-      return;
+    switch (state.phase) {
+      case 'no_config':
+        headline.textContent = 'No Hermes configured';
+        detail.textContent =
+          'Pass --url or set HERMES_TAURI_URL to attach to a running server, ' +
+          'or set HERMES_TAURI_CMD or a config.toml to start one.';
+        return;
+      case 'probing':
+        headline.textContent = 'Connecting to Hermes…';
+        detail.textContent = state.origin
+          ? `Checking ${state.origin}`
+          : 'Checking the configured Hermes server.';
+        return;
+      case 'starting':
+        headline.textContent = 'Starting Hermes…';
+        detail.textContent = 'Launching the configured Hermes server.';
+        return;
+      case 'waiting':
+        headline.textContent = 'Waiting for Hermes to become ready…';
+        detail.textContent = state.origin
+          ? `Health-checking ${state.origin}`
+          : 'Health-checking the new Hermes server.';
+        return;
+      case 'ready':
+        headline.textContent = 'Hermes is ready';
+        detail.textContent = 'Opening the app…';
+        return;
+      default:
+        headline.textContent = state.origin
+          ? `Hermes not reachable at ${state.origin}`
+          : 'Hermes not reachable';
+        detail.textContent = 'Check that the server is running, then try again.';
+        if (state.error) {
+          error.textContent = state.error;
+          error.hidden = false;
+        }
+        retry.hidden = false;
     }
-    if (state.phase === 'unreachable') {
-      headline.textContent = state.origin
-        ? `Hermes not reachable at ${state.origin}`
-        : 'Hermes not reachable';
-      detail.textContent = 'Check that the server is running, then try again.';
-      if (state.error) {
-        error.textContent = state.error;
-        error.hidden = false;
-      }
-      retry.hidden = false;
-      return;
-    }
-
-    headline.textContent = 'Connecting to Hermes…';
-    detail.textContent = state.origin
-      ? `Checking ${state.origin}`
-      : 'Checking the configured Hermes server.';
   };
 
   const showFailure = failure => render({

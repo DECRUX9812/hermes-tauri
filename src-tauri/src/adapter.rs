@@ -1,10 +1,9 @@
-use serde_json::to_string;
-
 const ADAPTER: &str = include_str!("adapter.js");
 
-pub fn script_for(backend_origin: Option<&str>) -> String {
-    let origin = backend_origin
-        .and_then(|origin| to_string(origin).ok())
-        .unwrap_or_else(|| "null".to_owned());
-    ADAPTER.replace("__HERMES_BACKEND_ORIGIN__", &origin)
+/// The adapter is origin-independent: in SPAWN mode the backend origin is
+/// unknown until connect resolves, so it runs on every http(s) page and the
+/// runtime capability (scoped to the exact origin after connect) is the IPC
+/// boundary. See adapter.js and docs/webkit-compat.md for the reasoning.
+pub fn script() -> &'static str {
+    ADAPTER
 }

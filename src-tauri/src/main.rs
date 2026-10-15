@@ -1,9 +1,16 @@
 mod adapter;
-mod connect;
+mod config;
+mod deeplink;
 mod guard;
+mod hotkey;
 mod native;
+mod polyfills;
+mod sidecar;
+mod tray;
+mod updater;
 
-use tauri::{webview::WebviewWindowBuilder, Manager, WebviewUrl};
+use tauri::{webview::WebviewWindowBuilder, Manager, RunEvent, WebviewUrl, WindowEvent};
+use tauri_plugin_notification::NotificationExt;
 
 fn main() {
     #[cfg(target_os = "linux")]
@@ -12,50 +19,143 @@ fn main() {
         std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
     }
 
-    let launch_config = connect::launch_url_from_args();
-    let backend_origin = launch_config
-        .as_ref()
-        .ok()
-        .and_then(Option::as_deref)
-        .and_then(|url| connect::LaunchTarget::parse(url).ok())
-        .map(|target| target.origin);
-    let manager = connect::BootManager::new(launch_config);
-
+    // single-instance must be the first plugin: it decides whether this
+    // process becomes the app or forwards its arguments and exits.
     let result = tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            tray::show_window(app);
+            deeplink::handle_args(app, &args);
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_deep_link::init())
         .invoke_handler(tauri::generate_handler![
-            connect::boot_state,
-            connect::boot_retry,
+            sidecar::boot_state,
+            sidecar::boot_retry,
             native::native_open_external,
-            native::native_notify
+            native::native_notify,
+            native::native_select_paths
         ])
         .setup(move |app| {
+            let handle = app.handle().clone();
+            let settings = config::load(handle.path().app_config_dir().ok());
+            let log_dir = handle.path().app_log_dir().ok();
+            if let Some(dir) = &log_dir {
+                // The sidecar crate appends to a log in here; the dir does not
+                // exist on a fresh install.
+                if let Err(error) = std::fs::create_dir_all(dir) {
+                    sidecar::log(&format!(
+                        "Could not create the log directory {}: {error}",
+                        dir.display()
+                    ));
+                }
+            }
+
+            app.manage(tray::TrayState::default());
+            let manager = sidecar::BootManager::new(
+                settings.resolved,
+                log_dir.map(|dir| dir.join("hermes-sidecar.log")),
+            );
             app.manage(manager.clone());
 
-            let navigation_app = app.handle().clone();
-            let new_window_app = app.handle().clone();
-            let navigation_origin = backend_origin.clone();
-            let new_window_origin = backend_origin.clone();
-            WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
-                .title("Hermes Tauri")
-                .inner_size(1280.0, 820.0)
-                .min_inner_size(900.0, 600.0)
-                .initialization_script(adapter::script_for(backend_origin.as_deref()))
-                .on_navigation(move |url| {
-                    guard::handle_navigation(&navigation_app, url, navigation_origin.as_deref())
-                })
-                .on_new_window(move |url, _features| {
-                    guard::handle_new_window(&new_window_app, url, new_window_origin.as_deref())
-                })
-                .build()?;
+            let navigation_app = handle.clone();
+            let new_window_app = handle.clone();
+            let window =
+                WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+                    .title("Hermes Tauri")
+                    .inner_size(1280.0, 820.0)
+                    .min_inner_size(900.0, 600.0)
+                    // Polyfills first, so app code and the adapter both see them.
+                    .initialization_script(polyfills::script())
+                    .initialization_script(adapter::script())
+                    .on_navigation(move |url| {
+                        let backend_origin =
+                            navigation_app.state::<sidecar::BootManager>().origin();
+                        // Every main-window navigation is logged with the
+                        // token redacted; a same-URL repeat is the reload
+                        // proof (review item 7).
+                        if backend_origin.as_deref()
+                            == Some(url.origin().ascii_serialization().as_str())
+                        {
+                            sidecar::log(&format!(
+                                "Main window navigation: {}",
+                                hermes_sidecar::redact(url.as_str())
+                            ));
+                        }
+                        guard::handle_navigation(&navigation_app, url, backend_origin.as_deref())
+                    })
+                    .on_new_window(move |url, features| {
+                        let backend_origin =
+                            new_window_app.state::<sidecar::BootManager>().origin();
+                        guard::handle_new_window(
+                            &new_window_app,
+                            url,
+                            features,
+                            backend_origin.as_deref(),
+                        )
+                    })
+                    .build()?;
 
-            manager.start(app.handle().clone());
+            let close_app = handle.clone();
+            let close_notified = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            window.on_window_event(move |event| {
+                if let WindowEvent::CloseRequested { api, .. } = event {
+                    if tray::available(&close_app) {
+                        // A tray exists: closing hides the window, Quit exits.
+                        api.prevent_close();
+                        let _ = close_app.get_webview_window("main").map(|w| w.hide());
+                        sidecar::log("Window closed to the tray");
+                        // A user without a visible tray icon still gets told
+                        // once how to get back (relaunching also shows it via
+                        // single-instance).
+                        if !close_notified.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                            if let Err(error) = close_app
+                                .notification()
+                                .builder()
+                                .title("Hermes Tauri")
+                                .body("Hermes is still running in the tray.")
+                                .show()
+                            {
+                                sidecar::log(&format!("Could not show the tray notice: {error}"));
+                            }
+                        }
+                    }
+                }
+            });
+
+            tray::create(&handle);
+            hotkey::register(&handle, settings.hotkey);
+            deeplink::init(&handle);
+            updater::init(&handle, &settings.updater);
+
+            let signal_app = handle.clone();
+            if let Err(error) = ctrlc::set_handler(move || {
+                sidecar::log("Termination signal received");
+                signal_app.exit(0);
+            }) {
+                sidecar::log(&format!(
+                    "Could not install the termination handler: {error}"
+                ));
+            }
+
+            manager.start(handle);
             Ok(())
         })
-        .run(tauri::generate_context!());
-    if let Err(error) = result {
-        eprintln!("Could not run Hermes Tauri: {error}");
-        std::process::exit(1);
+        .build(tauri::generate_context!());
+
+    match result {
+        Ok(app) => app.run(|app, event| match event {
+            // Both paths are idempotent: the backend shuts down exactly once.
+            RunEvent::ExitRequested { .. } | RunEvent::Exit => {
+                app.state::<sidecar::BootManager>().shutdown();
+            }
+            _ => {}
+        }),
+        Err(error) => {
+            eprintln!("Could not run Hermes Tauri: {error}");
+            std::process::exit(1);
+        }
     }
 }
