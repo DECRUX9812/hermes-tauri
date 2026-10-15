@@ -1,3 +1,7 @@
+//! Attach mode. `tests/common` reads `/proc` and uses `kill(2)`, so this target
+//! is Unix-only.
+#![cfg(unix)]
+
 mod common;
 
 use std::io::{BufRead, BufReader};

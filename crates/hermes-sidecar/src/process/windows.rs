@@ -1,6 +1,8 @@
 use std::ffi::c_void;
 use std::io;
 use std::os::windows::io::AsRawHandle;
+use std::os::windows::process::CommandExt;
+use std::path::PathBuf;
 use std::process::{Child, Command};
 
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
@@ -10,8 +12,54 @@ use windows_sys::Win32::System::JobObjects::{
     TerminateJobObject, JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 };
+use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
 
 pub(crate) fn configure(_command: &mut Command) {}
+
+/// The command to spawn for `program`.
+///
+/// `CreateProcessW` cannot start a batch file, so a `.cmd`/`.bat` backend (which
+/// is what `hermes-shell-config` resolves on `PATH` on Windows) is run through
+/// `cmd.exe` with a command line built by [`crate::batch`].
+pub(crate) fn command(program: &str, args: &[String]) -> io::Result<Command> {
+    if crate::batch::is_batch(program) {
+        let mut command = Command::new(cmd_exe()?);
+        command
+            .args(crate::batch::CMD_EXE_SWITCHES)
+            // `raw_arg`: the line is already quoted for `cmd.exe`, whose parsing
+            // rules are not the ones `CreateProcessW` argument escaping assumes.
+            .raw_arg(crate::batch::cmd_exe_command_line(program, args)?);
+        return Ok(command);
+    }
+    let mut command = Command::new(program);
+    command.args(args);
+    Ok(command)
+}
+
+/// `cmd.exe` from the system directory.
+///
+/// This is the call `std` makes for the same purpose
+/// (`std::sys::process::windows::command_prompt`). Unlike `%SystemRoot%` it is
+/// authoritative, and `PATH` is never consulted, so a `cmd.exe` placed earlier
+/// on it cannot be picked up.
+fn cmd_exe() -> io::Result<PathBuf> {
+    // `MAX_PATH`, the documented maximum this buffer has to hold; anything
+    // longer is refused instead of being silently truncated.
+    let mut buffer = [0u16; 260];
+    // SAFETY: `buffer` is a live array of 260 `u16` and its length is passed.
+    let len = unsafe { GetSystemDirectoryW(buffer.as_mut_ptr(), buffer.len() as u32) };
+    if len == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let len = len as usize;
+    if len >= buffer.len() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "the system directory path does not fit in MAX_PATH",
+        ));
+    }
+    Ok(PathBuf::from(String::from_utf16_lossy(&buffer[..len])).join("cmd.exe"))
+}
 
 /// Assignment happens after spawn, so a grandchild started in that window escapes the job.
 pub(crate) fn adopt(child: &mut Child) -> io::Result<ProcessGroup> {
@@ -82,6 +130,12 @@ impl ProcessGroup {
             )
         };
         ok == 0 || info.ActiveProcesses > 0
+    }
+
+    /// `ActiveProcesses` counts running processes only and Windows has no
+    /// zombies, so the membership probe already means "still live".
+    pub(crate) fn has_live_members(&self) -> bool {
+        self.has_members()
     }
 }
 

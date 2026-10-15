@@ -1,3 +1,7 @@
+//! Launch-link redaction in the sidecar log. `tests/common` is Unix-only, so
+//! this target is too.
+#![cfg(unix)]
+
 mod common;
 
 use common::*;
