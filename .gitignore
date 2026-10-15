@@ -2,6 +2,7 @@
 target/
 node_modules/
 dist/
+dist-release/
 *.AppImage
 *.deb
 src-tauri/gen/schemas
