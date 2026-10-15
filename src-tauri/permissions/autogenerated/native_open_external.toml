@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-native-open-external"
+description = "Enables the native_open_external command without any pre-configured scope."
+commands.allow = ["native_open_external"]
+
+[[permission]]
+identifier = "deny-native-open-external"
+description = "Denies the native_open_external command without any pre-configured scope."
+commands.deny = ["native_open_external"]

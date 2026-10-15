@@ -1,0 +1,19 @@
+[[permission]]
+identifier = "allow-boot-state"
+description = "Allows the boot page to read the current connection state."
+commands.allow = ["boot_state"]
+
+[[permission]]
+identifier = "allow-boot-retry"
+description = "Allows the boot page to retry the configured Hermes connection."
+commands.allow = ["boot_retry"]
+
+[[permission]]
+identifier = "allow-native-open-external"
+description = "Allows the Hermes web app to open an HTTP or HTTPS URL externally."
+commands.allow = ["native_open_external"]
+
+[[permission]]
+identifier = "allow-native-notify"
+description = "Allows the Hermes web app to display a native notification."
+commands.allow = ["native_notify"]
