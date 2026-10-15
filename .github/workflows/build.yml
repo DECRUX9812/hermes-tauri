@@ -37,9 +37,9 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Run clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Run tests
-        run: cargo test --workspace
+        run: cargo test --workspace --locked
 
   build:
     name: Build ${{ matrix.os }} / ${{ matrix.target }}
@@ -153,7 +153,7 @@ jobs:
         # manual cache management and separate cross-compilation config per platform.
         with:
           tauriScript: cargo tauri
-          args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} ${{ steps.signing.outputs.updater_config }}
+          args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} ${{ steps.signing.outputs.updater_config }} -- --locked
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
