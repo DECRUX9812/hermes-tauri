@@ -12,17 +12,17 @@ This document defines the implementation, verification status, known behaviors, 
 <!-- T7 fills in after the Xvfb proof -->
 
 #### Written but not run (CI Matrix)
-- **CI Runner**: `ubuntu-22.04` ([build.yml:52](file:///.github/workflows/build.yml#L52))
-- **Target Triple**: `x86_64-unknown-linux-gnu` ([build.yml:53](file:///.github/workflows/build.yml#L53))
-- **Bundles Configured**: `deb,appimage,rpm` ([build.yml:54](file:///.github/workflows/build.yml#L54))
-- **Artifact Upload**: Uploaded as `bundle-x86_64-unknown-linux-gnu` ([build.yml:161](file:///.github/workflows/build.yml#L161)) containing `.deb`, `.rpm`, `.AppImage`, and conditional `.AppImage.sig` ([build.yml:165-168](file:///.github/workflows/build.yml#L165-L168)).
-- **Code Quality**: Verified in the `check` job via `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, and `cargo test --workspace` ([build.yml:37-42](file:///.github/workflows/build.yml#L37-L42)).
+- **CI Runner**: `ubuntu-22.04` ([build.yml:52](../.github/workflows/build.yml#L52))
+- **Target Triple**: `x86_64-unknown-linux-gnu` ([build.yml:53](../.github/workflows/build.yml#L53))
+- **Bundles Configured**: `deb,appimage,rpm` ([build.yml:54](../.github/workflows/build.yml#L54))
+- **Artifact Upload**: Uploaded as `bundle-x86_64-unknown-linux-gnu` ([build.yml:161](../.github/workflows/build.yml#L161)) containing `.deb`, `.rpm`, `.AppImage`, and conditional `.AppImage.sig` ([build.yml:165-168](../.github/workflows/build.yml#L165-L168)).
+- **Code Quality**: Verified in the `check` job via `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, and `cargo test --workspace` ([build.yml:37-42](../.github/workflows/build.yml#L37-L42)).
 
 #### What is left
 1. Complete the Xvfb headless runtime proof (owned by T6/T7) to verify startup, session navigation, WebGL/studio rendering, and memory footprint.
 2. Verify package installation on native host distros (Debian, Ubuntu, Fedora/RHEL, Arch) rather than containerized environments.
 3. Validate desktop environment integration under both GNOME Shell (with and without the AppIndicator extension) and KDE Plasma.
-4. Verify Wayland vs X11 behavior for global window toggling and deep-link activation.
+4. Verify Wayland vs X11 behavior for global window toggling (X11 only via `global-hotkey`; requires active XWayland window focus on Wayland sessions) and deep-link activation.
 5. Benchmark runtime memory overhead of `WebKitWebProcess` under prolonged usage.
 
 ---
@@ -33,10 +33,10 @@ This document defines the implementation, verification status, known behaviors, 
 nothing verified yet
 
 #### Written but not run (CI Matrix)
-- **CI Runner**: `ubuntu-22.04-arm` ([build.yml:55](file:///.github/workflows/build.yml#L55))
-- **Target Triple**: `aarch64-unknown-linux-gnu` ([build.yml:56](file:///.github/workflows/build.yml#L56))
-- **Bundles Configured**: `deb,appimage` ([build.yml:57](file:///.github/workflows/build.yml#L57))
-- **Artifact Upload**: Uploaded as `bundle-aarch64-unknown-linux-gnu` ([build.yml:161](file:///.github/workflows/build.yml#L161)) containing `.deb`, `.AppImage`, and conditional `.AppImage.sig` ([build.yml:165,167-168](file:///.github/workflows/build.yml#L165-L168)). (RPM is not configured for ARM64).
+- **CI Runner**: `ubuntu-22.04-arm` ([build.yml:55](../.github/workflows/build.yml#L55))
+- **Target Triple**: `aarch64-unknown-linux-gnu` ([build.yml:56](../.github/workflows/build.yml#L56))
+- **Bundles Configured**: `deb,appimage` ([build.yml:57](../.github/workflows/build.yml#L57))
+- **Artifact Upload**: Uploaded as `bundle-aarch64-unknown-linux-gnu` ([build.yml:161](../.github/workflows/build.yml#L161)) containing `.deb`, `.AppImage`, and conditional `.AppImage.sig` ([build.yml:165,167-168](../.github/workflows/build.yml#L165-L168)). (RPM is not configured for ARM64).
 
 #### What is left
 1. Execute the GitHub Actions workflow on an actual `ubuntu-22.04-arm` runner to verify compilation and packaging of WebKitGTK dependencies on ARM64.
@@ -52,11 +52,11 @@ nothing verified yet
 nothing verified yet
 
 #### Written but not run (CI Matrix)
-- **CI Runner**: `macos-14` (Apple Silicon M1 runner) ([build.yml:58](file:///.github/workflows/build.yml#L58))
-- **Target Triple**: `aarch64-apple-darwin` ([build.yml:59](file:///.github/workflows/build.yml#L59))
-- **Bundles Configured**: `app,dmg` ([build.yml:60](file:///.github/workflows/build.yml#L60))
-- **Artifact Upload**: Uploaded as `bundle-aarch64-apple-darwin` ([build.yml:161](file:///.github/workflows/build.yml#L161)) containing `.dmg`, `.app.tar.gz`, and conditional `.app.tar.gz.sig` ([build.yml:169-171](file:///.github/workflows/build.yml#L169-L171)).
-- **Staging Handling**: `scripts/ci/stage-release.sh` renames the updater archive deterministically to `Hermes-Tauri_${VERSION}_aarch64.app.tar.gz` and `.sig` to avoid collision with x64 ([stage-release.sh:115](file:///scripts/ci/stage-release.sh#L115)).
+- **CI Runner**: `macos-14` (Apple Silicon M1 runner) ([build.yml:58](../.github/workflows/build.yml#L58))
+- **Target Triple**: `aarch64-apple-darwin` ([build.yml:59](../.github/workflows/build.yml#L59))
+- **Bundles Configured**: `app,dmg` ([build.yml:60](../.github/workflows/build.yml#L60))
+- **Artifact Upload**: Uploaded as `bundle-aarch64-apple-darwin` ([build.yml:161](../.github/workflows/build.yml#L161)) containing `.dmg`, `.app.tar.gz`, and conditional `.app.tar.gz.sig` ([build.yml:169-171](../.github/workflows/build.yml#L169-L171)).
+- **Staging Handling**: `scripts/ci/stage-release.sh` renames the updater archive deterministically to `Hermes-Tauri_${VERSION}_aarch64.app.tar.gz` and `.sig` to avoid collision with x64 ([stage-release.sh:115](../scripts/ci/stage-release.sh#L115)).
 
 #### What is left
 1. Provision and configure Apple Developer signing secrets in GitHub Actions: `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`.
@@ -73,11 +73,11 @@ nothing verified yet
 nothing verified yet
 
 #### Written but not run (CI Matrix)
-- **CI Runner**: `macos-14` (cross-compiling on Apple Silicon runner) ([build.yml:61](file:///.github/workflows/build.yml#L61))
-- **Target Triple**: `x86_64-apple-darwin` ([build.yml:62](file:///.github/workflows/build.yml#L62))
-- **Bundles Configured**: `app,dmg` ([build.yml:63](file:///.github/workflows/build.yml#L63))
-- **Artifact Upload**: Uploaded as `bundle-x86_64-apple-darwin` ([build.yml:161](file:///.github/workflows/build.yml#L161)) containing `.dmg`, `.app.tar.gz`, and conditional `.app.tar.gz.sig` ([build.yml:169-171](file:///.github/workflows/build.yml#L169-L171)).
-- **Staging Handling**: `scripts/ci/stage-release.sh` renames the updater archive deterministically to `Hermes-Tauri_${VERSION}_x86_64.app.tar.gz` and `.sig` to avoid collision with arm64 ([stage-release.sh:115](file:///scripts/ci/stage-release.sh#L115)).
+- **CI Runner**: `macos-14` (cross-compiling on Apple Silicon runner) ([build.yml:61](../.github/workflows/build.yml#L61))
+- **Target Triple**: `x86_64-apple-darwin` ([build.yml:62](../.github/workflows/build.yml#L62))
+- **Bundles Configured**: `app,dmg` ([build.yml:63](../.github/workflows/build.yml#L63))
+- **Artifact Upload**: Uploaded as `bundle-x86_64-apple-darwin` ([build.yml:161](../.github/workflows/build.yml#L161)) containing `.dmg`, `.app.tar.gz`, and conditional `.app.tar.gz.sig` ([build.yml:169-171](../.github/workflows/build.yml#L169-L171)).
+- **Staging Handling**: `scripts/ci/stage-release.sh` renames the updater archive deterministically to `Hermes-Tauri_${VERSION}_x86_64.app.tar.gz` and `.sig` to avoid collision with arm64 ([stage-release.sh:115](../scripts/ci/stage-release.sh#L115)).
 
 #### What is left
 1. Verify cross-compilation toolchain on the `macos-14` runner for Rust and C/C++ dependencies targeting Intel Macs.
@@ -93,17 +93,17 @@ nothing verified yet
 nothing verified yet
 
 #### Written but not run (CI Matrix)
-- **CI Runner**: `windows-latest` ([build.yml:64](file:///.github/workflows/build.yml#L64))
-- **Target Triple**: `x86_64-pc-windows-msvc` ([build.yml:65](file:///.github/workflows/build.yml#L65))
-- **Bundles Configured**: `nsis,msi` ([build.yml:66](file:///.github/workflows/build.yml#L66))
-- **Artifact Upload**: Uploaded as `bundle-x86_64-pc-windows-msvc` ([build.yml:161](file:///.github/workflows/build.yml#L161)) containing `*-setup.exe`, `*-setup.exe.sig` (conditional), `*.msi`, and `*.msi.sig` (conditional) ([build.yml:172-175](file:///.github/workflows/build.yml#L172-L175)).
-- **Code Signing**: Currently commented out in `build.yml:107-109`. Builds run unsigned by default.
+- **CI Runner**: `windows-latest` ([build.yml:64](../.github/workflows/build.yml#L64))
+- **Target Triple**: `x86_64-pc-windows-msvc` ([build.yml:65](../.github/workflows/build.yml#L65))
+- **Bundles Configured**: `nsis,msi` ([build.yml:66](../.github/workflows/build.yml#L66))
+- **Artifact Upload**: Uploaded as `bundle-x86_64-pc-windows-msvc` ([build.yml:161](../.github/workflows/build.yml#L161)) containing `*-setup.exe`, `*-setup.exe.sig` (conditional), `*.msi`, and `*.msi.sig` (conditional) ([build.yml:172-175](../.github/workflows/build.yml#L172-L175)).
+- **Code Signing**: Currently commented out in [build.yml:107-109](../.github/workflows/build.yml#L107-L109). Builds run unsigned by default.
 
 #### What is left
 1. Run the CI build workflow on `windows-latest` to confirm NSIS and WiX (MSI) bundle generation.
 2. Configure production code signing via Azure Trusted Signing or a PFX certificate to satisfy Microsoft SmartScreen.
 3. Test runtime execution and process lifecycle termination on Windows 10 and Windows 11.
-4. Validate that the compile-gated Windows Job Object implementation in `crates/hermes-sidecar/src/process/windows.rs` reliably terminates child and grandchild processes upon application exit.
+4. Validate that the compile-gated Windows Job Object implementation in [crates/hermes-sidecar/src/process/windows.rs](../crates/hermes-sidecar/src/process/windows.rs) reliably terminates child and grandchild processes upon application exit.
 5. Verify deep link registry entries written by the NSIS and MSI installers and confirm single-instance forwarding.
 
 ---
@@ -113,7 +113,7 @@ nothing verified yet
 ### 1. WebKitGTK Version Floor & DMABUF Renderer Workaround
 
 #### Version Floor
-The Linux shell dynamically links against WebKitGTK 4.1 (`libwebkit2gtk-4.1.so.0`). Compatibility findings from the WebKit audit ([docs/webkit-compat.md](file:///docs/webkit-compat.md)):
+The Linux shell dynamically links against WebKitGTK 4.1 (`libwebkit2gtk-4.1.so.0`). Compatibility findings from the WebKit audit ([webkit-compat.md](webkit-compat.md)):
 - **Dev Workstation Runtime**: WebKitGTK 4.1 `2.52.6-0ubuntu0.26.04.1` (Safari 26.4–26.6 era).
 - **Builder Container Image**: `hermes-tauri-builder:26.04` ships WebKitGTK 4.1 `2.52.6-0ubuntu0.26.04.1`.
 - **CI APT Package Floor**: `ubuntu-22.04` ships WebKitGTK `2.50.4-0ubuntu0.22.04.1` (verified at [Launchpad Ubuntu Jammy webkit2gtk](https://launchpad.net/ubuntu/jammy/+source/webkit2gtk)).
@@ -132,21 +132,78 @@ WebKitGTK 2.42+ introduced hardware-accelerated buffer sharing via DMA-BUF by de
 
 ---
 
-### 2. AppImage WebKitGTK Dynamic Linking
+### 2. AppImage WebKitGTK Bundling vs. Distribution WebKitGTK
 
-Tauri AppImage packages bundle application binaries and standard shared libraries, but **do not bundle WebKitGTK**. WebKitGTK requires deep coordination with the host display server, D-Bus session bus, font subsystem, and Mesa/EGL hardware drivers. Bundling it inside an AppImage creates severe ABI incompatibilities with host graphics drivers:
-- The AppImage dynamically links to `libwebkit2gtk-4.1.so.0` on the host system.
-- Target machines must have WebKitGTK 4.1 installed through their system package manager (`apt install libwebkit2gtk-4.1-0`, `dnf install webkit2gtk4.1`, or `pacman -S webkit2gtk-4.1`).
+The distribution packaging model differs fundamentally between the AppImage container and native package manager formats (`.deb` / `.rpm`):
+
+#### Built AppDir Inspection & Bundled Payload
+Unlike native system packages, the Tauri AppImage **bundles WebKitGTK and its runtime dependencies directly from the build machine**. Inspection of the built AppDir directory confirms the bundled libraries:
+- `usr/lib/libwebkit2gtk-4.1.so.0`
+- `usr/lib/libjavascriptcoregtk-4.1.so.0`
+- `usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/WebKitWebProcess`
+- `usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/injected-bundle/libwebkit2gtkinjectedbundle.so`
+
+Because WebKitGTK, JavaScriptCore, and their runtime helper processes are bundled, the AppDir's `usr/lib` directory is ~252 MB, producing an AppImage bundle of ~85.7 MiB (in contrast to the native `.deb` package, which is only ~6.84 MiB).
+
+#### Glibc Baseline & Oldest Supported Distro
+The official Tauri AppImage documentation states:
+> "AppImage is a distribution format that does not rely on the system installed packages and instead bundles all dependencies and files needed by the application. For this reason, the output file is larger but easier to distribute since it is supported on many Linux distributions and can be executed without installation."
+>
+> "Still, you should carefully use it as the file size grows from the 2-6 MB range to 70+ MB."
+>
+> "Core libraries such as glibc frequently break compatibility with older systems. For this reason, you must build your Tauri application using the oldest base system you intend to support that also provides Tauri v2’s required WebKitGTK 4.1 packages. Ubuntu 22.04 and Debian 12 are suitable baseline examples because they provide `libwebkit2gtk-4.1-dev` from their standard package repositories. Building on a newer base system can raise the minimum glibc version required by your app, so when running on an older system, you may face a runtime error like `/usr/lib/libc.so.6: version 'GLIBC_2.33' not found`."
+
+Because the bundled WebKitGTK binaries are compiled against the build machine's C runtime library (`glibc`), building on a newer distribution ties the AppImage to that distribution's `glibc` symbols. CI builds Linux artifacts on `ubuntu-22.04` to ensure maximum backwards compatibility with target host distributions.
+
+#### Deb & RPM Contrast
+In contrast, native Debian (`.deb`) and Red Hat (`.rpm`) packages do not bundle WebKitGTK. Instead, they declare package manager dependencies:
+- Debian/Ubuntu: `Depends: libwebkit2gtk-4.1-0, libgtk-3-0`
+- Fedora/RHEL: `Requires: webkit2gtk4.1, gtk3`
+
+When installed via package managers, the application dynamically links to the host system's native WebKitGTK shared library.
+
+#### Host Driver Interaction
+Even though the AppImage packages its own WebKitGTK binary tree, the bundled WebKitGTK process still interfaces at runtime with the host display server (X11 or Wayland), D-Bus session bus, font config, and host GPU hardware drivers (via Mesa / DRM / EGL / proprietary vendor drivers). Consequently, graphics driver behaviors and acceleration quirks (such as DMA-BUF incompatibilities on NVIDIA systems) still depend on the host workstation configuration.
+
 - Official Tauri AppImage Documentation: [Tauri AppImage Distribution](https://v2.tauri.app/distribute/appimage/)
 
 ---
 
-### 3. Linux Package Self-Update Limitations
+### 3. Linux Package Self-Update Mechanisms & Limitations
 
-Tauri's updater plugin (`tauri-plugin-updater`) operates by replacing the running executable binary in-place at runtime:
-- **AppImage**: Supports in-app self-updating because an AppImage is an unprivileged single executable that the running process can download, swap, and mark executable.
-- **Deb / RPM**: These packages install files into root-owned system directories (`/usr/bin/`, `/usr/share/applications/`). Unprivileged desktop applications cannot overwrite these files without system package manager execution (`sudo apt` / `sudo dnf`). Consequently, the Tauri updater cannot self-update Debian or RPM installations.
+Tauri provides application self-updating through the `tauri-plugin-updater` crate:
+
+#### Upstream Support in `tauri-plugin-updater` (Checked: v2.14.0)
+Historically, Linux auto-updating in desktop frameworks supported AppImage only. However, upstream pull request [tauri-apps/plugins-workspace #2624](https://github.com/tauri-apps/plugins-workspace/pull/2624) introduced bundle-specific updater targets, adding support for **`.deb`** and **`.rpm`** packages alongside **`.AppImage`** in `tauri-plugin-updater` v2 (verified in `tauri-plugin-updater` v2.14.0, [plugins/updater/src/updater.rs](https://github.com/tauri-apps/plugins-workspace/tree/v2/plugins/updater)).
+
+In `updater.rs` (lines 1213–1430), the update engine inspects the current installation type via `installer_for_bundle_type(bundle_type())`:
+1. **AppImage (`install_appimage`)**:
+   - Operates entirely in user-space without root elevation.
+   - Replaces the current running AppImage executable in-place (or unpacks a `.tar.gz` compressed AppImage when the `zip` feature is active), creating a backup in a temporary directory on the same mount point, writing the payload, and setting executable permissions (`0o700`).
+2. **Debian (`install_deb`)**:
+   - Validates the downloaded payload (`infer::archive::is_deb`).
+   - Writes the `.deb` package to a temporary path (`tauri_deb_update/package.deb`).
+   - Invokes `try_install_with_privileges(&pkg_path, "dpkg", "-i")`.
+3. **RPM (`install_rpm`)**:
+   - Validates the downloaded payload (`infer::archive::is_rpm`).
+   - Writes the `.rpm` package to a temporary path (`tauri_rpm_update/package.rpm`).
+   - Invokes `try_install_with_privileges(&pkg_path, "rpm", "-U")`.
+
+#### Privilege Elevation Mechanism for Deb / RPM
+Because `.deb` and `.rpm` packages install files into root-owned directories (`/usr/bin/`, `/usr/share/`), `try_install_with_privileges` attempts privilege escalation through three tiered strategies:
+1. `pkexec <cmd> <arg> <pkg_path>`: Attempts PolicyKit graphical authentication.
+2. GUI Sudo: Attempts graphical password acquisition via `zenity --password` or `kdialog --password` and pipes the credentials to `sudo -S`.
+3. Terminal Sudo: Executes `sudo <cmd> <arg> <pkg_path>` directly.
+
+#### Hermes Tauri Release Configuration
+While upstream `tauri-plugin-updater` provides `.deb` and `.rpm` installation logic, the Hermes Tauri release staging script ([stage-release.sh:38-44](../scripts/ci/stage-release.sh#L38-L44)) defines `PLATFORM_PREFERRED`:
+- `linux-x86_64`: `AppImage`
+- `linux-aarch64`: `AppImage`
+
+Consequently, our automated release manifest (`latest.json`) publishes AppImage bundles as the primary updater target for Linux. Debian and RPM packages staged in `dist-release/` are delivered as standalone package installer artifacts.
+
 - Official Tauri Updater Documentation: [Tauri Updater Plugin](https://v2.tauri.app/plugin/updater/)
+- Upstream PR: [tauri-apps/plugins-workspace #2624](https://github.com/tauri-apps/plugins-workspace/pull/2624)
 
 ---
 
@@ -164,11 +221,35 @@ Tauri v2 exposes system tray functionality through the `tray-icon` crate and `li
 ### 5. Global Hotkeys under Wayland vs X11
 
 The `tauri-plugin-global-shortcut` manages system-wide keyboard shortcuts:
-- **X11**: Fully supported via traditional X11 server key grabbing (`libxdo` / XGrabKey).
-- **Wayland**: Direct global key grabbing is explicitly blocked by Wayland's security architecture to prevent keystroke logging across independent client surfaces.
-- **Portal Requirement**: Global shortcut registration under Wayland requires the XDG Desktop Portal Global Shortcuts interface (`org.freedesktop.portal.GlobalShortcuts`). This is supported in modern KDE Plasma (5.27+) and GNOME (44+), but requires user authorization through the system portal dialog. On wlroots-based compositors without portal implementations (e.g. Sway, Hyprland), global shortcuts cannot be registered directly and must be bound in the compositor configuration.
+
+#### Upstream Engine: `global-hotkey`
+The plugin is built directly on top of the `global-hotkey` crate ([tauri-apps/global-hotkey](https://github.com/tauri-apps/global-hotkey)).
+- **Platforms Supported**: The upstream `global-hotkey` README explicitly specifies:
+  ```markdown
+  ## Platforms-supported:
+  - Windows
+  - macOS
+  - Linux (X11 Only)
+  ```
+- **X11 Implementation**: On Linux, the backend in `src/platform_impl/x11/mod.rs` connects to the X server using `x11rb::rust_connection::RustConnection` and registers hotkeys via `xproto::grab_key` (`XGrabKey`) on the root window, iterating across `ignored_mods()` (NumLock and CapsLock combinations).
+
+#### Wayland Limitations & XWayland Behavior
+- **No Portal Implementation**: Neither `global-hotkey` nor `tauri-plugin-global-shortcut` implements or consumes the XDG Desktop Portal GlobalShortcuts interface (`org.freedesktop.portal.GlobalShortcuts`).
+- **Wayland Security Model**: Native Wayland compositors isolate input between client surfaces to protect against keylogging. Traditional X11 key grabbing (`XGrabKey`) cannot listen to keystrokes on native Wayland surfaces.
+- **Behavior Under Wayland Sessions**: On a Wayland desktop, hotkeys registered through `tauri-plugin-global-shortcut` function **only via XWayland while an X11/XWayland window has active keyboard focus**. If the active window is a native Wayland surface or if the application is unfocused or backgrounded, hotkey events are not intercepted.
+
+#### Desktop Portal Support Status
+While modern desktop environments have introduced portal-mediated global shortcuts:
+- KDE Plasma added `org.freedesktop.portal.GlobalShortcuts` support in Plasma 5.27+.
+- GNOME did **not** ship GlobalShortcuts portal support in GNOME 44 (which only added input capture and session groundwork); portal support in `xdg-desktop-portal-gnome` was introduced via Merge Request !208 and debuted in **GNOME 48**.
+- wlroots-based compositors (Sway, Hyprland) do not implement the GlobalShortcuts portal.
+
+Because `global-hotkey` lacks a portal backend, global shortcuts currently remain functional exclusively under native X11 or focused XWayland windows.
+
 - Official Tauri Plugin Documentation: [Tauri Global Shortcut Plugin](https://v2.tauri.app/plugin/global-shortcut/)
+- Upstream Crate Repository: [tauri-apps/global-hotkey](https://github.com/tauri-apps/global-hotkey)
 - XDG Specification: [XDG Desktop Portal GlobalShortcuts](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.GlobalShortcuts.html)
+- GNOME Portal Implementation: [xdg-desktop-portal-gnome MR !208](https://gitlab.gnome.org/GNOME/xdg-desktop-portal-gnome/-/merge_requests/208)
 
 ---
 
@@ -229,12 +310,12 @@ Unsigned Windows executables trigger Microsoft Defender SmartScreen warnings ("W
 ### 10. Sidecar Process Tree Management via Windows Job Objects
 
 On Windows, child processes do not share Unix-style process group semantics (`setpgid` / `kill(-pid, SIGKILL)`). If a parent process crashes or terminates abruptly, child and grandchild processes become orphaned background tasks.
-- **Implementation**: In `crates/hermes-sidecar/src/process/windows.rs`, process management uses the Windows Job Object API:
+- **Implementation**: In [crates/hermes-sidecar/src/process/windows.rs](../crates/hermes-sidecar/src/process/windows.rs), process management uses the Windows Job Object API:
   - An unnamed job object is created via `CreateJobObjectW`.
   - Configured with `SetInformationJobObject` setting `JobObjectExtendedLimitInformation` with `LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`.
   - The spawned sidecar process is assigned to the job object via `AssignProcessToJobObject`.
   - When the Tauri application exits and closes the job handle (`CloseHandle`), the Windows kernel automatically terminates all processes in the job object.
-- **Status**: Compile-gated via `#[cfg(windows)]`. Fully implemented in the crate, but never run on the Linux dev workstation.
+- **Status & Caveats**: Compile-gated via `#[cfg(windows)]`. Fully implemented in the crate, but never run on the Linux dev workstation. Note that assignment occurs immediately after spawn, meaning any grandchild process spawned in that brief initial window could escape the job.
 - Microsoft Documentation: [Job Objects](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects)
 
 ---
