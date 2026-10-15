@@ -83,6 +83,7 @@ jobs:
             patchelf
 
       # Windows dependencies - WebView2 bootstrapper is pre-installed on windows-latest
+
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -93,7 +94,7 @@ jobs:
 
       # Prepare signing env: only write non-empty secrets to GITHUB_ENV.
       # tauri-action reads these at runtime; empty vars would trigger signing attempts and fail.
-      # Use heredoc (<<EOF) for multiline secrets (certificate, private key).
+      # Use heredoc with a random delimiter so a secret can never end the block early.
       - name: Prepare signing environment
         id: signing
         env:
@@ -123,22 +124,25 @@ jobs:
               echo "$var=$val" >> "$GITHUB_ENV"
             fi
           done
-          # Multiline secrets: use heredoc form to preserve newlines
+          # Multiline secrets: use heredoc with random delimiter
           for var in APPLE_CERTIFICATE TAURI_SIGNING_PRIVATE_KEY; do
             val="${!var}"
             if [ -n "$val" ]; then
+              delim="EOF_$(openssl rand -hex 8)"
               {
-                echo "$var<<EOF"
+                echo "$var<<$delim"
                 echo "$val"
-                echo "EOF"
+                echo "$delim"
               } >> "$GITHUB_ENV"
             fi
           done
-          # When TAURI_SIGNING_PRIVATE_KEY is present, enable updater artifacts for this build
+          # When TAURI_SIGNING_PRIVATE_KEY is present, enable updater artifacts via config file
           if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
-            echo "create_updater_artifacts=--config '{\"bundle\":{\"createUpdaterArtifacts\":true}}'" >> "$GITHUB_OUTPUT"
+            # Write updater config to a temp file (tauri-cli v2 accepts --config <path>)
+            printf '{"bundle":{"createUpdaterArtifacts":true}}' > "$RUNNER_TEMP/updater.conf.json"
+            echo "updater_config=--config $RUNNER_TEMP/updater.conf.json" >> "$GITHUB_OUTPUT"
           else
-            echo "create_updater_artifacts=" >> "$GITHUB_OUTPUT"
+            echo "updater_config=" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Build Tauri app
@@ -149,7 +153,7 @@ jobs:
         # manual cache management and separate cross-compilation config per platform.
         with:
           tauriScript: cargo tauri
-          args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} ${{ steps.signing.outputs.create_updater_artifacts }}
+          args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} ${{ steps.signing.outputs.updater_config }}
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -176,24 +180,15 @@ jobs:
           pattern: bundle-*
           merge-multiple: false
 
-      - name: Generate latest.json for updater
-        id: latest
+      - name: Stage release artifacts and generate latest.json
+        id: stage
         run: |
-          bash scripts/ci/latest-json.sh
+          bash scripts/ci/stage-release.sh
 
       - name: Create Draft GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           draft: true
-          files: |
-            artifacts/**/*.deb
-            artifacts/**/*.AppImage
-            artifacts/**/*.rpm
-            artifacts/**/*.dmg
-            artifacts/**/*.app.tar.gz
-            artifacts/**/*_x64-setup.exe
-            artifacts/**/*.msi
-            artifacts/**/*.sig
-            latest.json
+          files: dist-release/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
