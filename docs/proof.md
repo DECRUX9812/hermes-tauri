@@ -32,6 +32,12 @@ Checks (no PNG; each is reported as PASS or FAIL next to the shots):
 - `splash-cap`: with `HERMES_TAURI_SPLASH_CAP_MS=3000` the shell removed the always-on-top splash on its own while the app was still
   loading, left one window, and the app painted afterwards. That is the same code path as the 30 s default, shortened so the removal
   can be observed at all (the app paints in 6-9 s, so the real cap is exactly the case that never happens).
+- `retry` (T20): two real clicks on the boot page's Retry button. The button is located in a live frame
+  (`$WORK/retry_button_xy.py`: the lowest bordered box on the page, so a differently wrapped error message cannot move the click off
+  it). The first click, with a listener on the port that accepts and never answers, must log a new attempt, bring the splash back
+  (two windows carry the app title while the attempt runs) and lose it again when the probe times out (`Splash removed`, one window
+  left). The second click happens after the test Hermes was started on that same port and the shell's `config.toml` — the source an
+  attempt re-reads — was pointed at its launch link: the shell must connect, paint the app and leave one window.
 
 ### The final run
 

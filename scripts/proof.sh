@@ -178,6 +178,10 @@ declare -a CHECK_ORDER=() CHECK_RESULT=() CHECK_DESC=()
 # shellcheck disable=SC2329  # runs from the EXIT/INT/TERM trap at the end of the file
 inner_cleanup() {
   local status=$?
+  stop_black_hole
+  # The retry check starts a second test Hermes; stop it by its own pid file.
+  # `stop` is a no-op when that instance never started.
+  HERMES_TAURI_TEST_DIR="$PORT_DIR-retry" "$TEST_HERMES" stop >/dev/null 2>&1 || true
   stop_shell
   rm -f "$OUT"/shell-*.pid 2>/dev/null || true
   # A run that dies early still leaves a truthful index of the shots it wrote.
@@ -630,6 +634,12 @@ inner_main() {
     "the same window after a second invocation handed it the ${DEEPLINK_SHOT_ROUTE} route"
 
   stop_shell
+  # The retry check needs its own port: a free one in the test range that the
+  # test Hermes is not on, because the first half of the check must find it
+  # closed.
+  local retry_port
+  retry_port="$(free_port "${origin##*:}")" || die 'no free port for the retry check'
+  retry_check "$retry_port"
   cap_check
   stop_shell
   write_readme
@@ -776,6 +786,229 @@ cap_check() {
     "the cap removed the always-on-top splash while the app was still loading (same code path as the 30 s default, shortened to ${cap_ms} ms); one window was left and the app painted afterwards"
 }
 
+# Where the boot page's Retry button is, measured in the frame on screen now.
+# boot/boot.css centers a 480 px panel in the window and the button is the last
+# element in it, so the button is the lowest bordered box on the page; the
+# helper walks the rows for that box ($WORK/retry_button_xy.py) rather than
+# trusting a fixed spot, which a longer or shorter error message above the
+# button would move.
+retry_button_xy() {
+  local frame="$WORK/retry-frame.png" xy
+  scrot -o "$frame" || return 1
+  xy="$(python3 "$WORK/retry_button_xy.py" "$frame" 2>/dev/null)" || return 1
+  [[ "$xy" =~ ^[0-9]+\ [0-9]+$ ]] || return 1
+  printf '%s\n' "$xy"
+}
+
+# A real click on the button: pointer moved onto it, button 1 pressed.
+click_retry() {
+  local x="$1" y="$2"
+  xdotool windowfocus "$(window_id)" 2>/dev/null || true
+  xdotool mousemove --sync "$x" "$y" 2>/dev/null || return 1
+  sleep 0.3
+  xdotool click 1
+}
+
+# A listener that accepts connections and never answers. The shell's health
+# probe then runs into its 3 s timeout instead of the instant refusal a closed
+# port gives, which is what keeps the splash on screen long enough between the
+# click and the failure to be observed. Held and stopped by pid.
+BLACK_HOLE_PID=0
+
+start_black_hole() {
+  local port="$1"
+  python3 - "$port" >/dev/null 2>&1 <<'PY' &
+import socket
+import sys
+
+port = int(sys.argv[1])
+server = socket.socket()
+server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+server.bind(("127.0.0.1", port))
+server.listen(16)
+held = []
+while True:
+    try:
+        connection, _ = server.accept()
+    except OSError:
+        break
+    held.append(connection)  # accepted, deliberately never answered
+PY
+  BLACK_HOLE_PID=$!
+  sleep 0.5
+  kill -0 "$BLACK_HOLE_PID" 2>/dev/null
+}
+
+stop_black_hole() {
+  if [[ "$BLACK_HOLE_PID" =~ ^[1-9][0-9]*$ ]]; then
+    kill -TERM "$BLACK_HOLE_PID" 2>/dev/null || true
+    wait "$BLACK_HOLE_PID" 2>/dev/null || true
+  fi
+  BLACK_HOLE_PID=0
+}
+
+# The retry check (R8 finding 1: the earlier proof only ever photographed the
+# failure page). A real click on the boot page's Retry must start a new attempt,
+# put the always-on-top splash back up for it and lose it again when the attempt
+# fails; a second click, with the test Hermes started on that same port, must
+# end with the app on screen.
+#
+# The shell runs from its config.toml here, which is the one source an attempt
+# re-reads from scratch: it first names the port where nothing listens (the
+# 01-boot state), and the second click happens after the file was pointed at the
+# launch link of the test Hermes that was started on that port (the link carries
+# the session token, which a bare `--url` retry would not have).
+retry_check() {
+  local port="$1"
+  local config_dir="$STATE_DIR/config/dev.hermes-plus.desktop"
+  local config_file="$config_dir/config.toml"
+  local retry_dir="$PORT_DIR-retry"
+  local mark windows max_windows deadline launch_url xy attempts lines
+
+  printf 'proof: retry check, nothing listening on %s yet\n' "$port"
+  mkdir -p "$config_dir" || die "cannot create $config_dir"
+
+  # 1. Start against the closed port: the same state as 01-boot.
+  {
+    printf '# Written by scripts/proof.sh for the retry check.\n'
+    printf 'url = "http://127.0.0.1:%s"\n' "$port"
+    printf 'spawn_if_unreachable = false\n'
+  } >"$config_file"
+  start_shell retry
+  wait_window 30 || die 'the shell never mapped a window'
+  place_window
+  if ! wait_log 'Hermes connection failed' 40 >/dev/null || ! wait_painted 4 20; then
+    record_check retry FAIL "the shell never showed the boot page with Retry"
+    stop_shell
+    return 1
+  fi
+  sleep 2
+  if ! xy="$(retry_button_xy)"; then
+    record_check retry FAIL "the Retry button could not be located in the boot page's frame"
+    stop_shell
+    return 1
+  fi
+  printf 'proof: Retry button at %s\n' "$xy"
+
+  # 2. First click: the port accepts but never answers, so the next attempt
+  #    keeps its splash up for the probe's 3 s timeout.
+  if ! start_black_hole "$port"; then
+    record_check retry FAIL "could not hold port $port with a silent listener"
+    stop_shell
+    return 1
+  fi
+  mark="$(wc -l <"$SHELL_LOG")"
+  if ! click_retry $xy; then
+    stop_black_hole
+    record_check retry FAIL "the Retry click could not be delivered"
+    stop_shell
+    return 1
+  fi
+
+  # 3. Sample the window list while that attempt runs: the splash comes back
+  #    (two windows carry the app title) and goes away again on the failure
+  #    (one window). The loop runs until the shell logged that dismissal, so
+  #    the counts below are read while and after the attempt really happened.
+  max_windows=0
+  attempts=0
+  deadline=$((SECONDS + 45))
+  while ((SECONDS < deadline)); do
+    windows="$(window_count)"
+    ((windows > max_windows)) && max_windows="$windows"
+    lines="$(tail -n +"$((mark + 1))" "$SHELL_LOG" 2>/dev/null)"
+    grep -q 'Connecting to Hermes' <<<"$lines" && attempts=1
+    if ((attempts == 1)) && grep -q 'Splash removed' <<<"$lines"; then
+      break
+    fi
+    sleep 0.1
+  done
+  # This loop read the log itself, so the shared marker moves past it.
+  SHELL_LOG_LINES="$(wc -l <"$SHELL_LOG")"
+  stop_black_hole
+  lines="$(tail -n +"$((mark + 1))" "$SHELL_LOG" 2>/dev/null)"
+  windows="$(window_count)"
+
+  if ((attempts == 0)); then
+    record_check retry FAIL "the Retry click started no new connection attempt"
+    stop_shell
+    return 1
+  fi
+  if ((max_windows != 2)); then
+    record_check retry FAIL \
+      "the retry attempt never had two windows on screen (highest count $max_windows), so the splash did not come back"
+    stop_shell
+    return 1
+  fi
+  if ! grep -q 'Splash removed' <<<"$lines"; then
+    record_check retry FAIL "the failure did not dismiss the splash it had put back"
+    stop_shell
+    return 1
+  fi
+  if ((windows != 1)); then
+    record_check retry FAIL \
+      "after the failed retry $windows windows carry the app title, expected one"
+    stop_shell
+    return 1
+  fi
+  if ! xy="$(retry_button_xy)"; then
+    record_check retry FAIL "the Retry button could not be located after the failed retry"
+    stop_shell
+    return 1
+  fi
+
+  # 4. Second click: the backend answers on that port now (the attempt re-reads
+  #    the config file, which points at its launch link), so the app must end up
+  #    on screen with the splash gone.
+  printf 'proof: starting the test Hermes on %s for the retry\n' "$port"
+  if ! HERMES_TAURI_TEST_DIR="$retry_dir" "$TEST_HERMES" start "$port" >/dev/null; then
+    record_check retry FAIL "the test Hermes did not start on port $port"
+    stop_shell
+    return 1
+  fi
+  launch_url="$(cat "$retry_dir/launch-url" 2>/dev/null)"
+  if [[ "$launch_url" != "http://127.0.0.1:$port"* ]]; then
+    record_check retry FAIL "the test Hermes on $port wrote no usable launch link"
+    stop_shell
+    return 1
+  fi
+  {
+    printf '# Written by scripts/proof.sh for the retry check.\n'
+    printf 'url = "%s"\n' "$launch_url"
+    printf 'spawn_if_unreachable = false\n'
+  } >"$config_file"
+  if ! click_retry $xy; then
+    record_check retry FAIL "the second Retry click could not be delivered"
+    stop_shell
+    return 1
+  fi
+  if ! wait_log "Hermes backend ready at http://127.0.0.1:$port" 90 >/dev/null; then
+    record_check retry FAIL "the retry did not connect to the test Hermes on port $port"
+    stop_shell
+    return 1
+  fi
+  if ! wait_log 'First frame of the Hermes app painted' 90 >/dev/null; then
+    record_check retry FAIL "the app never painted after the retry connected"
+    stop_shell
+    return 1
+  fi
+  windows="$(window_count)"
+  if ((windows != 1)); then
+    record_check retry FAIL \
+      "the app painted but $windows windows carry the app title: the splash stayed up"
+    stop_shell
+    return 1
+  fi
+  if ! wait_painted "$MIN_COLOURS" 60; then
+    record_check retry FAIL "no painted app frame came back after the retry"
+    stop_shell
+    return 1
+  fi
+
+  record_check retry PASS \
+    "a real click on the boot page's Retry started a new attempt (the shell logged it), put the splash back up (two windows carried the app title while the attempt ran) and lost it again when that attempt failed (Splash removed, one window left); a second click, after the test Hermes was started on that port and the shell's config.toml was pointed at its launch link, connected, painted the app and left one window"
+  stop_shell
+}
+
 # ── spawn mode ───────────────────────────────────────────────────────────────
 
 spawn_shutdown_check() {
@@ -884,7 +1117,10 @@ if __name__ == "__main__":
     raise SystemExit(main(sys.argv[1]))
 PY
   cat >"$WORK/png_colours.py" <<'PY'
-"""Distinct colours on the same grid, read back from a scrot PNG."""
+"""PNG reader and the distinct-colour count of a scrot capture.
+
+`read_png` is shared with retry_button_xy.py, which needs the pixels.
+"""
 import struct
 import sys
 import zlib
@@ -892,7 +1128,8 @@ import zlib
 GRID = (32, 20)
 
 
-def main(path):
+def read_png(path):
+    """(width, height, channels, rows) of an 8-bit, non-interlaced PNG."""
     with open(path, "rb") as stream:
         data = stream.read()
     if data[:8] != b"\x89PNG\r\n\x1a\n":
@@ -953,6 +1190,11 @@ def main(path):
             raise SystemExit(1)
         rows.append(line)
         previous = line
+    return width, height, channels, rows
+
+
+def main(path):
+    width, height, channels, rows = read_png(path)
     cols, samples = GRID
     colours = set()
     for gy in range(samples):
@@ -962,6 +1204,80 @@ def main(path):
             x = gx * (width - 1) // (cols - 1)
             colours.add(bytes(line[x * channels:x * channels + 3]))
     print(len(colours))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1]))
+PY
+  cat >"$WORK/retry_button_xy.py" <<'PY'
+"""Where the boot page's Retry button is, in pixels of a scrot capture.
+
+boot/boot.css centers a panel of at most 480 px in the window (`body` is a
+grid with `place-items: center` and the panel is its only child) and the
+button is the panel's last element, so the button is the lowest bordered box
+on the page. How far down it sits depends on how many lines the error message
+above it wrapped to, which is why this walks the frame for the box instead of
+a fixed spot: a row whose pixels differ from the row above across one
+contiguous run of 40..200 px is a border (glyphs give scattered runs, and the
+panel's own border and its shadow span the whole panel, so neither
+qualifies). The lowest such row is the button's bottom border, the nearest
+one 20..60 px above it with an overlapping span is its top border, and the
+middle of the two is where a click lands on the button.
+
+Prints "x y" and exits 0; exits 1 when the frame does not hold such a button.
+"""
+import sys
+
+from png_colours import read_png
+
+MIN_WIDTH = 40
+MAX_WIDTH = 200
+MIN_HEIGHT = 20
+MAX_HEIGHT = 60
+# Antialiasing leaves one-row gaps inside a border run.
+MAX_GAP = 3
+
+
+def runs(row, above, width, channels):
+    """Contiguous runs where this row differs from the row above it."""
+    found = []
+    start = last = None
+    for x in range(1, width):
+        index = x * channels
+        if row[index:index + 3] == above[index:index + 3]:
+            continue
+        if start is None:
+            start = last = x
+        elif x - last <= MAX_GAP:
+            last = x
+        else:
+            found.append((start, last))
+            start = last = x
+    if start is not None:
+        found.append((start, last))
+    return [(a, b) for a, b in found if MIN_WIDTH <= b - a <= MAX_WIDTH]
+
+
+def main(path):
+    width, height, channels, rows = read_png(path)
+    candidates = []
+    for y in range(1, height):
+        for a, b in runs(rows[y], rows[y - 1], width, channels):
+            candidates.append((y, a, b))
+    if not candidates:
+        return 1
+    bottom_y, bottom_a, bottom_b = candidates[-1]
+    tops = [
+        candidate
+        for candidate in candidates
+        if MIN_HEIGHT <= bottom_y - candidate[0] <= MAX_HEIGHT
+        and min(bottom_b, candidate[2]) - max(bottom_a, candidate[1]) >= MIN_WIDTH
+    ]
+    if not tops:
+        return 1
+    top_y = tops[-1][0]
+    print((bottom_a + bottom_b) // 2, (top_y + bottom_y) // 2)
     return 0
 
 
@@ -1012,7 +1328,11 @@ write_readme() {
       printf 'first painted frame, so there is no blank window. 05-group-chat is a group chat\n'
       printf 'created through the UI with one typed neutral message, not the seeded "Demo\n'
       printf 'Product Room": the seeded room does not hydrate in a fresh webview profile (a UI\n'
-      printf 'boot race in the hermes-bots plugin, also in Chromium; see docs/test-hermes.md).\n\n'
+      printf 'boot race in the hermes-bots plugin, also in Chromium; see docs/test-hermes.md).\n'
+      printf 'The retry check drives the boot page'"'"'s Retry button with two real clicks (see the\n'
+      printf 'check table): it locates the button in a live frame, watches the splash come back and\n'
+      printf 'go again on a failed attempt, and ends with the app on screen after the test Hermes\n'
+      printf 'was started on the port that attempt used.\n\n'
     fi
     printf '| shot | result | colours | md5 | what it shows |\n|---|---|---|---|---|\n'
     for index in "${!SHOT_ORDER[@]}"; do
