@@ -31,11 +31,15 @@
 #             marker is untouched. (6e)
 #   launch 3  cold start with `hermes-tauri://open?path=/team`: the window ends
 #             on #/team with a live session, and F5 reloads it in place and
-#             keeps the session (two shots, different md5). (6b, 6c)
+#             keeps the session. (6b, 6c)
 #
 # Input is real (xdotool F5, the shell's own deep link). Shots are verified the
 # same way as scripts/proof.sh: a distinct-colour count on a 32x20 sample grid
-# (a blank window scores 1) and an md5 that has not been seen before.
+# (a blank window scores 1) and an md5 that has not been seen before. The one
+# exception is the F5 pair: a reload of the same route paints the same pixels,
+# and WebKitGTK reloads without going through the shell's navigation handler, so
+# the reload is proven by the front door serving the document again and by the
+# frame leaving its settled state while the webview reloads.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -46,6 +50,10 @@ INNER=0
 SCREEN="1440x900x24"
 WINDOW_TITLE="Hermes Tauri"
 MIN_COLOURS=12
+# A neutral pointer parking spot (scripts/proof.sh parks at 600,300 too): moving
+# the pointer off the sidebar keeps a hover repaint out of the reload shots.
+PARK_X=600
+PARK_Y=300
 
 usage() {
   cat <<'USAGE'
@@ -233,7 +241,10 @@ SIDECAR_LOG=""
 ORIGIN=""
 PORT=""
 
-declare -a SHOT_ORDER=() SHOT_MD5=() SHOT_RESULT=()
+declare -a SHOT_ORDER=() SHOT_RESULT=()
+# The shots only, for the "the screen never changed" check: the names have to
+# line up with the md5s, which the checks recorded by `record` would not.
+declare -a SHOT_MD5=() SHOT_NAME=()
 
 record() {
   local name="$1" result="$2" detail="$3"
@@ -411,26 +422,14 @@ wait_painted() {
   return 1
 }
 
-# Waits for the painted frame to come back (a reload repaints the page).
-wait_repaint() {
-  local timeout="${1:-60}" deadline=$((SECONDS + ${1:-60})) colours="" changed=0
-  while ((SECONDS < deadline)); do
-    colours="$(probe_colours)"
-    if [[ -n "$colours" ]] && ((colours >= MIN_COLOURS)); then
-      changed=$((changed + 1))
-      ((changed >= 2)) && { printf '%s\n' "$colours"; return 0; }
-    else
-      changed=0
-    fi
-    sleep 0.3
-  done
-  return 1
-}
-
 capture() {
   local name="$1"
   scrot -o "$OUT/$name.png" || return 1
   python3 "$WORK/png_colours.py" "$OUT/$name.png" 2>/dev/null | tr -dc '0-9'
+}
+
+frame_md5() {
+  md5sum "$OUT/$1.png" 2>/dev/null | cut -d' ' -f1
 }
 
 # Captures one shot, checks it is painted and not a copy of an earlier shot.
@@ -445,15 +444,85 @@ shot() {
     record "$name" FAIL "blank frame: ${colours:-unreadable} colours, under $min"
     return 0
   fi
-  md5="$(md5sum "$OUT/$name.png" | cut -d' ' -f1)"
+  md5="$(frame_md5 "$name")"
   for index in "${!SHOT_MD5[@]}"; do
     if [[ "${SHOT_MD5[$index]}" == "$md5" ]]; then
-      record "$name" FAIL "identical to ${SHOT_ORDER[$index]}.png: the screen never changed"
+      record "$name" FAIL "identical to ${SHOT_NAME[$index]}.png: the screen never changed"
       return 0
     fi
   done
   SHOT_MD5+=("$md5")
+  SHOT_NAME+=("$name")
   record "$name" PASS "$colours colours, md5 $md5, $desc"
+}
+
+# Records a shot from a PNG that already exists (the frame `wait_frame_change`
+# caught). A reload of the same route paints the same pixels again, so the pair
+# is checked as "painted" plus "not a copy of any *other* shot" rather than
+# "different from each other".
+#
+# `min` defaults to the run's minimum, and the mid-reload shot lowers it to 1:
+# WebKitGTK clears the webview to a white frame while it reloads (measured: the
+# caught frame scores 2 colours, both whites), so a colour minimum there would
+# reject the very state the check exists to catch. That frame's evidence is that
+# it differs from the settled one, which `wait_frame_change` established by md5.
+reload_shot() {
+  local name="$1" desc="$2" min="${3:-$MIN_COLOURS}" colours md5 index seen=0
+  colours="$(python3 "$WORK/png_colours.py" "$OUT/$name.png" 2>/dev/null | tr -dc '0-9')"
+  if [[ -z "$colours" ]] || ((colours < min)); then
+    record "$name" FAIL "blank frame: ${colours:-unreadable} colours, under $min"
+    return 0
+  fi
+  md5="$(frame_md5 "$name")"
+  for index in "${!SHOT_MD5[@]}"; do
+    [[ "${SHOT_MD5[$index]}" == "$md5" ]] && seen=1
+  done
+  if ((seen == 0)); then
+    SHOT_MD5+=("$md5")
+    SHOT_NAME+=("$name")
+  fi
+  record "$name" PASS "$colours colours, md5 $md5, $desc"
+}
+
+# The md5 of the frame on screen right now, for the settle/leave checks (these
+# samples are not shots, so they do not land in $OUT).
+sample_md5() {
+  scrot -o "$WORK/sample.png" 2>/dev/null || return 1
+  md5sum "$WORK/sample.png" | cut -d' ' -f1
+}
+
+# Waits for the frame to settle: two samples 0.6 s apart with the same md5.
+# Prints that md5, which is what a later reload has to differ from.
+wait_stable_frame() {
+  local timeout="${1:-30}" deadline=$((SECONDS + ${1:-30})) first second
+  while ((SECONDS < deadline)); do
+    first="$(sample_md5)" || { sleep 0.5; continue; }
+    sleep 0.6
+    second="$(sample_md5)" || { sleep 0.5; continue; }
+    if [[ -n "$first" && "$first" == "$second" ]]; then
+      printf '%s\n' "$first"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Waits for the webview to leave its settled frame, which is what a reload looks
+# like on screen (the page repaints while it reloads). Polls fast, because the
+# state lasts a few hundred milliseconds, and keeps the frame it caught in
+# $OUT/$name.png.
+wait_frame_change() {
+  local name="$1" settled="$2" timeout="${3:-45}" deadline=$((SECONDS + ${3:-45})) md5
+  while ((SECONDS < deadline)); do
+    scrot -o "$OUT/$name.png" 2>/dev/null || { sleep 0.2; continue; }
+    md5="$(frame_md5 "$name")"
+    if [[ -n "$md5" && "$md5" != "$settled" ]]; then
+      printf '%s\n' "$md5"
+      return 0
+    fi
+    sleep 0.2
+  done
+  return 1
 }
 
 # Any process still carrying the payload's HERMES_HOME after the shell exited.
@@ -469,13 +538,23 @@ leftovers() {
   printf '%s' "$found"
 }
 
-# Milliseconds since the epoch, for the start-up timings.
-now_ms() {
-  date +%s%3N
+# Start-up timings use bash's own $SECONDS (whole seconds, like scripts/proof.sh);
+# `date +%s%3N` is not portable here (this host prints nanoseconds for it).
+now_s() {
+  printf '%s' "$SECONDS"
 }
 
 sidecar_log_path() {
   find "$HOME_DIR" -name 'hermes-sidecar.log' 2>/dev/null | head -n 1
+}
+
+# The front door's access log is the sidecar log; the number of times it served
+# the document is the direct witness of a reload (a hash-only route change does
+# not refetch it, and a reload does not go through the shell's navigation
+# handler, so the shell log never names it).
+document_requests() {
+  [[ -n "$SIDECAR_LOG" && -r "$SIDECAR_LOG" ]] || { printf '0'; return 0; }
+  grep -c '"GET / HTTP/1.1"' "$SIDECAR_LOG" 2>/dev/null || printf '0'
 }
 
 # mtime and size of the installed payload's `.ready` marker: installing the
@@ -538,8 +617,8 @@ inner_main() {
   note "hermes on PATH: $(command -v hermes || echo none)"
 
   # ── launch 1: first run (unpack + cold start) ──────────────────────────────
-  local started painted first_ms origin
-  started="$(now_ms)"
+  local started painted first_s origin
+  started="$(now_s)"
   start_shell first
   wait_window 120 || die 'the shell never mapped a window'
   place_window
@@ -566,9 +645,9 @@ inner_main() {
   note "sidecar log: ${SIDECAR_LOG:-<none>}"
 
   wait_painted "$MIN_COLOURS" 120 >/dev/null || note 'the UI did not paint in 120 s'
-  painted="$(now_ms)"
-  first_ms=$((painted - started))
-  shot 01-bundled-ready "first run: bundled payload unpacked, UI painted ($((first_ms / 1000)) s after launch)"
+  painted="$(now_s)"
+  first_s=$((painted - started))
+  shot 01-bundled-ready "first run: bundled payload unpacked, UI painted (${first_s} s after launch)"
 
   local health
   health="$(curl -s -o /dev/null -w '%{http_code}' "$ORIGIN/healthz" || true)"
@@ -609,7 +688,7 @@ inner_main() {
   # ── launch 2: second run (payload already unpacked) ────────────────────────
   local ready_before
   ready_before="$(ready_marker_state)"
-  started="$(now_ms)"
+  started="$(now_s)"
   start_shell second
   wait_window 60 || die 'the shell never mapped a window on the second run'
   place_window
@@ -622,9 +701,9 @@ inner_main() {
   else
     record 08b-payload-not-reinstalled FAIL "the payload was installed again (marker before ${ready_before:-none}, after $(ready_marker_state))"
   fi
-  painted="$(now_ms)"
-  local second_ms=$((painted - started))
-  record 09-second-run PASS "second run painted $((second_ms / 1000)) s after launch, first run $((first_ms / 1000)) s"
+  painted="$(now_s)"
+  local second_s=$((painted - started))
+  record 09-second-run PASS "second run painted ${second_s} s after launch, first run ${first_s} s"
   stop_shell
   sleep 1
 
@@ -640,7 +719,12 @@ inner_main() {
   fi
   wait_painted "$MIN_COLOURS" 120 >/dev/null || note 'the team route did not paint'
   sleep 2
-  shot 11-team-authenticated "the #/team route with a live front-door session"
+  # The bundled payload is the real product with no seeded data (unlike the test
+  # Hermes the T6 proof attaches to), so the #/team route is applied but the UI
+  # shows its own first-run provider setup page. The route itself is proven by
+  # check 10 and by the shell's `Navigated to .../#/team` line; this shot is the
+  # frame that route painted.
+  shot 11-team-authenticated "the #/team route applied to a live front-door session (the bundled payload ships no seeded data, so the UI shows its own setup page)"
 
   # The front-door cookie is what keeps the page authenticated: WebKitGTK
   # stores it under the fresh HOME, so its presence is direct evidence.
@@ -650,20 +734,44 @@ inner_main() {
     record 12-session-cookie FAIL 'no hermes_plus_session cookie under the fresh HOME'
   fi
 
+  # ── F5 (the shell's own reload accelerator) ───────────────────────────────
+  #
+  # A reload of the same route paints the same pixels again, and it does not go
+  # through the shell's navigation handler (WebKitGTK reloads internally, so the
+  # shell log has no new line for it). Two witnesses stand in: the front door
+  # serving the document again, and the frame leaving its settled state while the
+  # webview reloads, which the after shot captures.
+  local settled before_docs after_docs reload_frame
   xdotool windowfocus "$(window_id)" 2>/dev/null || true
+  xdotool mousemove --sync "$PARK_X" "$PARK_Y" 2>/dev/null || true
   sleep 1
-  shot 13-reload-before "the #/team route before the F5 reload"
-  xdotool key --clearmodifiers F5
-  if wait_repaint "$MIN_COLOURS" 90 >/dev/null; then
-    sleep 2
-    shot 14-reload-after "the same route after F5: the webview reloaded and repainted"
+  if settled="$(wait_stable_frame 30)"; then
+    # The before shot is that exact settled frame, so the pair is honest: the
+    # reload has to leave this frame.
+    cp -f "$WORK/sample.png" "$OUT/13-reload-before.png"
+    reload_shot 13-reload-before "the #/team route settled before the F5 reload (md5 $settled)"
   else
-    record 14-reload-after FAIL 'F5 did not repaint the webview'
+    note 'the frame never settled before the reload'
+    capture 13-reload-before >/dev/null || true
+    settled="$(frame_md5 13-reload-before)"
+    reload_shot 13-reload-before "the #/team route before the F5 reload"
   fi
-  if wait_log 'Main window navigation: http://127\.0\.0\.1:[0-9]+/#/team' 30 >/dev/null; then
-    record 15-reload-in-place PASS 'the reload stayed on #/team on the backend origin'
+  before_docs="$(document_requests)"
+  xdotool key --clearmodifiers F5
+  if reload_frame="$(wait_frame_change 14-reload-after "$settled" 45)"; then
+    # This frame is the webview mid-reload, so it is allowed to be the white
+    # frame WebKitGTK paints while it reloads; the md5 inequality against the
+    # settled frame is the evidence (check 15 is the direct witness).
+    reload_shot 14-reload-after "the webview mid-reload: the frame left its settled state ($settled -> $reload_frame)" 1
   else
-    record 15-reload-in-place FAIL 'the reload did not reload #/team'
+    record 14-reload-after FAIL 'F5 did not repaint the webview: the frame never left its settled state'
+  fi
+  wait_painted "$MIN_COLOURS" 60 >/dev/null || note 'the page did not come back painted after the reload'
+  after_docs="$(document_requests)"
+  if ((after_docs > before_docs)); then
+    record 15-reload-in-place PASS "the front door served the document again ($before_docs -> $after_docs 'GET /' requests): the webview reloaded in place"
+  else
+    record 15-reload-in-place FAIL "the front door never served the document again ($before_docs 'GET /' requests before and after F5)"
   fi
   if grep -rlq 'hermes_plus_session' "$HOME_DIR" 2>/dev/null; then
     record 16-reload-authenticated PASS 'the session cookie survived the reload'
@@ -680,7 +788,7 @@ inner_main() {
     record 17-shutdown-after-deeplink FAIL "processes survived:$left"
   fi
 
-  printf 'bundled-proof: first run %s ms, second run %s ms\n' "$first_ms" "$second_ms"
+  printf 'bundled-proof: first run %s s, second run %s s\n' "$first_s" "$second_s"
   printf 'bundled-proof: done, %s checks, %s\n' "${#SHOT_ORDER[@]}" \
     "$([[ "$FAILED" == 1 ]] && printf 'at least one failed' || printf 'all passed')"
   RUN_COMPLETE=1
