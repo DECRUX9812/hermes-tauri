@@ -273,12 +273,42 @@ def _signal(pid, sig):
         pass
 
 
-def window_ids(env, root):
+def window_search(env, pid):
     out = subprocess.run(
-        ["xdotool", "search", "--onlyvisible", "--pid", str(root)],
+        ["xdotool", "search", "--onlyvisible", "--pid", str(pid)],
         env=env, capture_output=True, text=True, check=False,
     ).stdout
     return [int(wid) for wid in out.split() if wid.isdigit()]
+
+
+def descendant_pids(root):
+    table = process_table()
+    children = {}
+    for pid, info in table.items():
+        children.setdefault(info["ppid"], []).append(pid)
+    found = set()
+    stack = [root]
+    while stack:
+        pid = stack.pop()
+        if pid in found or pid not in table:
+            continue
+        found.add(pid)
+        stack.extend(children.get(pid, ()))
+    return found
+
+
+def window_ids(env, root):
+    ids = window_search(env, root)
+    if ids:
+        return ids
+    # The measured command may be a wrapper (e.g. dbus-run-session) that forks the
+    # real X11 client, so the wrapper's pid is not the window's _NET_WM_PID. Search
+    # the wrapper's process tree instead. Unrelated windows (e.g. the Xvfb root) are
+    # never matched.
+    ids = []
+    for pid in sorted(descendant_pids(root)):
+        ids.extend(window_search(env, pid))
+    return ids
 
 
 def window_box(env, wid):
