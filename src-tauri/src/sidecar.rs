@@ -31,6 +31,20 @@ const PENDING_ROUTE_TIMEOUT: Duration = Duration::from_secs(30);
 /// reap of the group.
 const ATTEMPT_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// The commands the *remote* backend page may call through IPC, and the only
+/// grant of `allow-app-painted` in the app: a local page (the boot page) must
+/// never reach any of them. Granted by [`BootManager::add_remote_capability`]
+/// as a runtime capability scoped to the backend origin on the main window
+/// only; `capabilities/boot-local.json` covers the boot page's own two
+/// commands. `tests::the_boot_page_cannot_call_native_commands` pins the
+/// separation between the two.
+const REMOTE_PERMISSIONS: [&str; 4] = [
+    "allow-native-open-external",
+    "allow-native-notify",
+    "allow-native-select-paths",
+    "allow-app-painted",
+];
+
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum BootPhase {
@@ -602,16 +616,16 @@ impl BootManager {
         }
 
         // The runtime capability is the IPC boundary: scoped to the exact
-        // backend origin, on the main webview only, and limited to the three
-        // native commands the adapter overlays. The plugins behind them are
-        // called from Rust; the frontend gets no plugin permissions.
-        let capability = CapabilityBuilder::new("hermes-backend")
+        // backend origin, on the main webview only, and limited to the native
+        // commands the adapter overlays (plus the first-frame signal). The
+        // plugins behind them are called from Rust; the frontend gets no plugin
+        // permissions.
+        let mut capability = CapabilityBuilder::new("hermes-backend")
             .remote(format!("{origin}/*"))
-            .window("main")
-            .permission("allow-native-open-external")
-            .permission("allow-native-notify")
-            .permission("allow-native-select-paths")
-            .permission("allow-app-painted");
+            .window("main");
+        for permission in REMOTE_PERMISSIONS {
+            capability = capability.permission(permission);
+        }
         app.add_capability(capability)
             .map_err(|error| format!("Could not grant Hermes native capabilities: {error}"))?;
         *added = Some(origin.to_owned());
@@ -655,8 +669,17 @@ pub fn boot_state(manager: State<'_, BootManager>) -> BootStatus {
     manager.status()
 }
 
+/// Async on purpose: `retry` puts the splash back up, and Tauri documents that
+/// creating a window from a *synchronous* command deadlocks on Windows
+/// (WebView2, tauri-apps/wry#583); its fix is "use `async` commands and
+/// separate threads when creating windows" (tauri 2.12.4,
+/// `window/mod.rs` / `webview/webview_window.rs`, "Known issues"). An async
+/// command runs on Tauri's runtime instead of the main thread, so the window
+/// creation is dispatched to the event loop as usual. The 5 s at most that
+/// `retry` waits for a superseded attempt blocks one runtime worker, not the
+/// UI thread.
 #[tauri::command]
-pub fn boot_retry(manager: State<'_, BootManager>, app: AppHandle) -> Result<(), String> {
+pub async fn boot_retry(manager: State<'_, BootManager>, app: AppHandle) -> Result<(), String> {
     manager.retry(app)
 }
 
@@ -749,7 +772,12 @@ fn deferred_route(pending: Option<&str>, route: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{deferred_route, immediate_route_origin, launch_consumed, start_status, BootPhase};
+    use super::{
+        deferred_route, immediate_route_origin, launch_consumed, start_status, BootPhase,
+        REMOTE_PERMISSIONS,
+    };
+    use std::fs;
+    use std::path::{Path, PathBuf};
     use tauri::Url;
 
     const ORIGIN: &str = "http://127.0.0.1:18810";
@@ -864,5 +892,97 @@ mod tests {
         // must say "preparing" rather than "probing".
         assert_eq!(start_status(true).phase, BootPhase::Preparing);
         assert_eq!(start_status(false).phase, BootPhase::Probing);
+    }
+
+    /// The boot page is a local page, so its capability is what stands between
+    /// it and the native commands the backend page may call (review R8 item 4).
+    /// The invariant, not the file: the local boot capability carries the boot
+    /// page's own two commands plus the event listener, and none of the remote
+    /// grants — while `app_painted`, which removes the splash, is granted only
+    /// by the runtime remote capability, scoped to the backend origin.
+    #[test]
+    fn the_boot_page_cannot_call_native_commands() {
+        const BOOT_COMMANDS: [&str; 3] = [
+            "allow-boot-state",
+            "allow-boot-retry",
+            "core:event:allow-listen",
+        ];
+
+        let capabilities = Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities");
+        let boot: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(capabilities.join("boot-local.json"))
+                .expect("capabilities/boot-local.json is readable"),
+        )
+        .expect("capabilities/boot-local.json is JSON");
+
+        assert_eq!(
+            boot["local"],
+            serde_json::Value::Bool(true),
+            "the boot page is a local page, not a remote one"
+        );
+        assert_eq!(
+            boot["windows"],
+            serde_json::json!(["main", "splash"]),
+            "the local boot capability covers exactly the two windows that show the boot page"
+        );
+
+        let granted: Vec<String> = boot["permissions"]
+            .as_array()
+            .expect("permissions is an array")
+            .iter()
+            .map(|permission| {
+                permission
+                    .as_str()
+                    .expect("a permission is a string")
+                    .to_owned()
+            })
+            .collect();
+        for permission in &granted {
+            assert!(
+                BOOT_COMMANDS.contains(&permission.as_str()),
+                "the local boot capability grants {permission}, which the boot page has no use for"
+            );
+        }
+        for permission in REMOTE_PERMISSIONS {
+            assert!(
+                !granted.iter().any(|entry| entry == permission),
+                "the local boot capability grants {permission}: the native commands belong to the \
+                 backend origin only"
+            );
+        }
+
+        // No capability file grants a remote permission either: the runtime
+        // capability in `add_remote_capability` is the only grant, and it is
+        // the one place where the origin and the main window are checked.
+        let mut files: Vec<PathBuf> = fs::read_dir(&capabilities)
+            .expect("capabilities is a directory")
+            .map(|entry| entry.expect("a capabilities entry").path())
+            .filter(|path| {
+                path.extension()
+                    .is_some_and(|extension| extension == "json")
+            })
+            .collect();
+        files.sort();
+        assert!(
+            files.contains(&capabilities.join("boot-local.json")),
+            "the boot page's capability file is gone"
+        );
+        for file in &files {
+            let value: serde_json::Value = serde_json::from_str(
+                &fs::read_to_string(file).unwrap_or_else(|error| panic!("{file:?}: {error}")),
+            )
+            .unwrap_or_else(|error| panic!("{file:?} is not JSON: {error}"));
+            for permission in value["permissions"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{file:?} carries no permissions array"))
+            {
+                let permission = permission.as_str().expect("a permission is a string");
+                assert!(
+                    !REMOTE_PERMISSIONS.contains(&permission),
+                    "{file:?} grants {permission} to every local page; only the runtime remote \
+                     capability (sidecar.rs) may"
+                );
+            }
+        }
     }
 }

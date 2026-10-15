@@ -12,6 +12,10 @@
 //! The process helpers at the bottom mirror `tests/bundled_payload.rs` (T15);
 //! each integration test is its own crate, so they are repeated rather than
 //! shared.
+//!
+//! The installer itself (`payload_install`) is Unix-only for now: the launcher
+//! it unpacks is a Unix executable, so this target is Unix-only too.
+#![cfg(unix)]
 
 use std::fs;
 use std::path::{Path, PathBuf};

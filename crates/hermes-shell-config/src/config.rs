@@ -176,8 +176,12 @@ pub enum ConfigError {
     #[error("Could not parse the config file {}: {source}", .path.display())]
     ConfigFile {
         path: PathBuf,
+        // Boxed: `toml::de::Error` is by far the largest payload here, and
+        // unboxed it pushes the whole enum past clippy's 128-byte threshold on
+        // the Windows target (`clippy::result_large_err`), where every
+        // `Result<_, ConfigError>` would then carry that size.
         #[source]
-        source: toml::de::Error,
+        source: Box<toml::de::Error>,
     },
     #[error("Could not read the config file {}: {source}", .path.display())]
     ConfigFileIo {
@@ -455,7 +459,7 @@ fn read_config_file(path: &Path) -> Result<Option<ConfigFile>, ConfigError> {
     };
     let file: ConfigFile = toml::from_str(&text).map_err(|source| ConfigError::ConfigFile {
         path: path.to_owned(),
-        source,
+        source: Box::new(source),
     })?;
     Ok(Some(file))
 }

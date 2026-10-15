@@ -367,6 +367,15 @@ different cause), so `crates/hermes-sidecar/src/connect.rs` (`SCRUBBED_ENV`, `sc
 variables from every child the shell spawns. `LD_LIBRARY_PATH` is deliberately left alone: the AppDir's
 libraries do not disturb the payload (measured), and they can only help on a host that lacks one.
 
+The scrub is the same for every spawned backend, whatever named it: the bundled payload, a
+`HERMES_TAURI_CMD` command and a `config.toml` `command` all go through that one `spawn()`. It is a
+`env_remove` applied *after* the configured env, and `env_remove` wins, so those eight names cannot be
+handed to a backend through `SidecarConfig.env` either (the review's suggested escape hatch does not
+exist): a launcher that needs one has to set it itself, in its own process. Every other variable the
+config names does reach the backend, which is what the fixture asserts end to end
+(`crates/hermes-sidecar/tests/spawn.rs`, `spawned_backend_does_not_inherit_the_shells_python_env`:
+`PYTHONHOME`/`PYTHONPATH` from the config arrive unset, `HERMES_HOME` from the same config arrives).
+
 **Password mode.** With `auth = "password"` the front door serves a token-less `/login`, so the shell's
 "the launch page consumed its credential" check (`sidecar.rs:670`, `launch_consumed`) is true at once
 and a deep link arriving during login can preempt the login page. The payload defaults to `token`

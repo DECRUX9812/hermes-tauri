@@ -82,13 +82,8 @@ jobs:
           export AR_x86_64_pc_windows_msvc="$RUNNER_TEMP/noop-msvc-tool.sh"
           cargo check --locked --target x86_64-pc-windows-msvc --all-targets \
             -p hermes-sidecar -p hermes-shell-config
-          # `clippy::result_large_err` fires for this target only: on Windows
-          # `ConfigError::ConfigFile` (crates/hermes-shell-config/src/config.rs,
-          # owned by another task) crosses clippy's 128-byte threshold. Every
-          # other lint is still denied.
           cargo clippy --locked --target x86_64-pc-windows-msvc --all-targets \
-            -p hermes-sidecar -p hermes-shell-config -- \
-            -D warnings -A clippy::result_large_err
+            -p hermes-sidecar -p hermes-shell-config -- -D warnings
 
   build:
     name: Build ${{ matrix.os }} / ${{ matrix.target }}

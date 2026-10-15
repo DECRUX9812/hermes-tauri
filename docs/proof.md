@@ -32,6 +32,12 @@ Checks (no PNG; each is reported as PASS or FAIL next to the shots):
 - `splash-cap`: with `HERMES_TAURI_SPLASH_CAP_MS=3000` the shell removed the always-on-top splash on its own while the app was still
   loading, left one window, and the app painted afterwards. That is the same code path as the 30 s default, shortened so the removal
   can be observed at all (the app paints in 6-9 s, so the real cap is exactly the case that never happens).
+- `retry` (T20): two real clicks on the boot page's Retry button. The button is located in a live frame
+  (`$WORK/retry_button_xy.py`: the lowest bordered box on the page, so a differently wrapped error message cannot move the click off
+  it). The first click, with a listener on the port that accepts and never answers, must log a new attempt, bring the splash back
+  (two windows carry the app title while the attempt runs) and lose it again when the probe times out (`Splash removed`, one window
+  left). The second click happens after the test Hermes was started on that same port and the shell's `config.toml` — the source an
+  attempt re-reads — was pointed at its launch link: the shell must connect, paint the app and leave one window.
 
 ### The final run
 
@@ -56,6 +62,23 @@ One run of `scripts/proof.sh --bin $HOME/.cache/hermes-tauri/target-T6/release/h
 
 `--spawn-shutdown` passed in its own run: the shell started its own Hermes (pid 3806995, pgid 3806995) and SIGTERM to the shell
 stopped it within 1 s, with no surviving pid or pgid.
+
+### T20 rerun (with the `retry` check)
+
+The same script ran again on the T20 build (binary `$HOME/.cache/hermes-tauri/target-t20/release/hermes-tauri`, 25,034,640 B,
+sha256 `664397e3ee7824b327890ad2716f9456441c43024e9182919fd37da6cecf9317`; deb 8,961,474 B), now with the `retry` check in it:
+nine shots and three checks passed, exit 0.
+
+| check | result |
+|---|---|
+| reload-session | PASS |
+| retry | PASS |
+| splash-cap | PASS |
+
+The nine shots are the same pages as the table above (they are in that run's output directory, not committed); their frames differ
+because every run is its own fresh webview profile and seed. The retry check's shell log (`shell-retry.log`) shows the three
+attempts it drives: `Hermes connection failed` twice, for the start and for the first click (both against the closed port), then
+`Hermes backend ready at http://127.0.0.1:18802` and `First frame of the Hermes app painted` after the second click.
 
 ## Reproducing the proof (T6 build, `scripts/proof.sh`)
 

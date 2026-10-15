@@ -38,9 +38,9 @@ Runs code quality and verification checks on every push, PR, and tag:
   - Test Suite: `cargo test --workspace --locked`
 - **Windows Code Paths**: `rustup target add x86_64-pc-windows-msvc`, then, for the two pure-Rust crates that hold Windows-only code:
   - `cargo check --locked --target x86_64-pc-windows-msvc --all-targets -p hermes-sidecar -p hermes-shell-config`
-  - `cargo clippy --locked --target x86_64-pc-windows-msvc --all-targets -p hermes-sidecar -p hermes-shell-config -- -D warnings -A clippy::result_large_err`
+  - `cargo clippy --locked --target x86_64-pc-windows-msvc --all-targets -p hermes-sidecar -p hermes-shell-config -- -D warnings`
 
-  `clippy::result_large_err` is the one lint that is allowed, and only here: on Windows `ConfigError::ConfigFile` in `crates/hermes-shell-config/src/config.rs` crosses clippy's 128-byte threshold, which it does not on Linux. Fixing that means boxing the error, which belongs to whoever owns that file. Everything else is denied as usual.
+  No lint is allowed here: `ConfigError::ConfigFile` in `crates/hermes-shell-config/src/config.rs` used to trip `clippy::result_large_err` on this target (not on Linux), and its `toml::de::Error` payload is now boxed, so the same `-D warnings` as everywhere else applies. The only other Windows-only compile break this step ever found was a Unix-only integration test that lacked its `#![cfg(unix)]` gate.
 
   Before this, `cfg(windows)` code was never compiled anywhere: this job built only the Linux target, and the Windows runner only ran the build, so two missing `windows-sys` features and a missing method in `hermes-sidecar` stayed invisible until `cargo tauri build` on Windows. `src-tauri` is not part of this check: its Windows paths are compiled by the `build` job on the real runner with the real toolchain.
 
