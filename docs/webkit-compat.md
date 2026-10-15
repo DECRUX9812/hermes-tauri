@@ -10,7 +10,7 @@ WebKitGTK and Safari do not share an exact public version map. The Safari column
 |---|---:|---|---|
 | Host runtime library | WebKitGTK 4.1 **2.52.6-0ubuntu0.26.04.1** | Safari 26.4–26.6 era | `ldconfig -p` exposes `libwebkit2gtk-4.1.so.0`; `dpkg-query` reports 2.52.6. |
 | Linux builder image `hermes-tauri-builder:26.04` | WebKitGTK 4.1 **2.52.6-0ubuntu0.26.04.1** | Safari 26.4–26.6 era | `docker run --rm --memory 2g hermes-tauri-builder:26.04 dpkg -l` reports the runtime and dev packages. |
-| `ubuntu-22.04` CI apt floor, current package candidate | WebKitGTK **2.50.4-0ubuntu0.22.04.1** | Safari 26.0 era | Ubuntu Jammy package record for `libwebkit2gtk-4.0-37` / `webkit2gtk`. The task note said “2.4x”; that is historical (for example 2.44.3 exists), while the current Jammy security candidate is 2.50.4. |
+| `ubuntu-22.04` CI apt floor, current package candidate | WebKitGTK **2.50.4-0ubuntu0.22.04.1** | Safari 26.0 era | Ubuntu Jammy package record for `libwebkit2gtk-4.0-37` / `webkit2gtk` (verified at https://launchpad.net/ubuntu/jammy/+source/webkit2gtk). The task note said “2.4x”; that is historical (for example 2.44.3 exists), while the current Jammy security candidate is 2.50.4. |
 | Playwright browser downloaded for comparison | WebKit **26.5**, Playwright build `webkit-2336` | Safari 26.5 era | Downloaded successfully, but the host lacks `libevent-2.1-7t64`, `libavif16`, and `libmanette-0.2-0`, so it did not launch. |
 | Runtime smoke fallback | Host WebKitGTK **2.52.6** | Safari 26.4–26.6 era | Real PyGObject `WebKit2.WebView` under Xvfb. This is the same engine family the Linux shell links. |
 | Chromium control | Chrome for Testing **151.0.7922.34** | not applicable | Same smoke script and routes. |
@@ -85,7 +85,26 @@ Runtime diff: no console or page-error diff. The only observed difference is slo
 ### Shell-side (Tauri)
 
 1. Keep `WEBKIT_DISABLE_DMABUF_RENDERER=1` as the Linux default unless the user overrides it. This avoids the known blank/black DMABUF path on NVIDIA and Xvfb.
-2. Wire a tiny `requestIdleCallback`/`cancelIdleCallback` init-script shim before app code. The shim can be a guarded `setTimeout` approximation with a monotonic `timeRemaining()`. It is not committed on this branch because creating `src-tauri/src/polyfills.js` before the shell scaffold exists would make the workspace’s `src-tauri*` member fail to load; the UI already takes its fallback paths.
+2. Wire a tiny `requestIdleCallback`/`cancelIdleCallback` init-script shim before app code. The shim is a guarded `setTimeout` approximation with a monotonic `timeRemaining()`. It is not added as `src-tauri/src/polyfills.js` on this branch because `master` has no `src-tauri` directory yet (an empty `src-tauri/` directory breaks the Cargo workspace root); instead, T5 wires it in as an initialization script:
+
+   ```javascript
+   (() => {
+     if (typeof window.requestIdleCallback === 'function') return;
+     window.requestIdleCallback = function (callback, options) {
+       const start = Date.now();
+       const timeout = (options && options.timeout) || 50;
+       return window.setTimeout(() => {
+         callback({
+           didTimeout: false,
+           timeRemaining: () => Math.max(0, 50 - (Date.now() - start))
+         });
+       }, 1);
+     };
+     window.cancelIdleCallback = function (id) {
+       window.clearTimeout(id);
+     };
+   })();
+   ```
 3. Keep WebGL enabled in WebKitGTK settings. The studio route needs it and rendered successfully on the host; add telemetry or a user-visible shell error only for context-creation failure.
 4. Handle WebKitGTK permission decisions explicitly for microphone, notifications, and clipboard-sensitive actions. The UI already feature-checks these APIs, but the shell needs the native delegate/policy so denials are intentional and recoverable.
 5. Keep the remote capability scoped to the exact loopback backend origin and keep the backend CSP compatible with `script-src 'self' blob:` for the runtime plugin loader.
