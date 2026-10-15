@@ -12,12 +12,9 @@ These are the early shots; the final T5 build replaces them (see the later secti
   the test Hermes working directory's git branch as a chip.
 - `03-plugin-rail.png`: the plugin rail on the far left with the Kanban plugin open (`#/kanban`, empty default board).
 - `04-team.png`: `#/team` with the Demo Product Team org chart (Research Bot as lead, Writer Bot, Reviewer Bot).
-- `05-group-chat.png`: a group chat opened through the UI, with two neutral typed messages and Research Bot working. The seeded "Demo
-  Product Room" is listed in the sidebar but its four seeded messages do not hydrate in a fresh profile (UI boot race, see
-  docs/test-hermes.md). The open room is a second room named "Demo Product" created during the run, not the seeded one.
-- `06-reload-before.png`: `#/team` before the reload attempt.
-- `07-reload-after.png`: `#/team` after RELAUNCHING the shell with the same launch link. F5 and Ctrl+R do nothing in the T1 build
-  (WebKitGTK has no default reload accelerator), so this shot does not prove an in-place reload.
+- `05-group-chat.png`: a group chat created through the UI with demo bots (Reviewer Bot, Writer Bot) and one neutral typed message ("Demo: please summarize the launch checklist") submitted to the room. The seeded "Demo Product Room" does not hydrate in a fresh profile (docs/test-hermes.md), so the proof creates a fresh room via the UI.
+- `06-reload-before.png`: the group chat room before the F5 reload.
+- `07-reload-after.png`: the same route after F5 reload: the webview reloaded and repainted, still attached.
 
 ## Reproducing the proof (T5 build, `scripts/proof.sh`)
 
@@ -30,7 +27,7 @@ scripts/proof.sh [--bin PATH] [--out DIR] [--port-dir DIR] [--spawn-shutdown]
 ```
 
 - `--bin PATH` shell binary to drive (default `$HOME/.cache/hermes-tauri/target/release/hermes-tauri`).
-- `--out DIR` shots, `README.md`, one log per shell launch and `dbus-stderr.log` (default `/tmp/hermes-tauri-t6p/shots`).
+- `--out DIR` shots, `README.md`, one log per shell launch and `dbus-stderr.log` (default `/tmp/hermes-tauri-t6g/shots`).
 - `--port-dir DIR` state dir of the disposable test Hermes (default `/tmp/hermes-tauri-test-proof`). It must live under
   `/tmp/hermes-tauri-test*`, so the proof can never talk to a real Hermes.
 - `--spawn-shutdown` skips the shot list: the shell starts its own Hermes from `HERMES_TAURI_CMD`, then receives SIGTERM and the

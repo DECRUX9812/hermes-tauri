@@ -13,6 +13,12 @@ pub fn handle_navigation(app: &AppHandle, url: &Url, backend_origin: Option<&str
     }
 
     if is_http(url) {
+        // The proof reads this line: an off-origin navigation never loads in
+        // a shell window (the token is redacted).
+        sidecar::log(&format!(
+            "Opening externally: {}",
+            hermes_sidecar::redact(url.as_str())
+        ));
         open_external(app, url);
     }
     false
@@ -40,10 +46,21 @@ pub fn handle_new_window(
             }
         },
         PopupDecision::OpenExternal => {
+            sidecar::log(&format!(
+                "Opening externally: {}",
+                hermes_sidecar::redact(url.as_str())
+            ));
             open_external(app, &url);
             NewWindowResponse::Deny
         }
-        PopupDecision::Deny => NewWindowResponse::Deny,
+        PopupDecision::Deny => {
+            // Dropped: say so in the log (the URL is redacted on principle).
+            sidecar::log(&format!(
+                "Denied a popup {}",
+                hermes_sidecar::redact(url.as_str())
+            ));
+            NewWindowResponse::Deny
+        }
     }
 }
 
@@ -86,11 +103,31 @@ fn create_preview_window(
             let backend_origin = navigation_app.state::<BootManager>().origin();
             handle_navigation(&navigation_app, url, backend_origin.as_deref())
         })
-        .on_new_window(move |url, features| {
+        .on_new_window(move |url, _features| {
             let backend_origin = new_window_app.state::<BootManager>().origin();
-            handle_new_window(&new_window_app, url, features, backend_origin.as_deref())
+            // Cross-origin new-window requests go to the browser. A preview
+            // window never opens further popups: popups opening popups is
+            // unbounded nesting with no user value (review F4).
+            match popup_decision(&url, backend_origin.as_deref()) {
+                PopupDecision::OpenExternal => {
+                    sidecar::log(&format!(
+                        "Opening externally: {}",
+                        hermes_sidecar::redact(url.as_str())
+                    ));
+                    open_external(&new_window_app, &url);
+                    NewWindowResponse::Deny
+                }
+                PopupDecision::Preview | PopupDecision::Deny => NewWindowResponse::Deny,
+            }
         })
         .build()
+        .inspect(|window| {
+            sidecar::log(&format!(
+                "Opened preview window {:?} for {}",
+                window.label(),
+                hermes_sidecar::redact(url.as_str())
+            ));
+        })
         .map_err(|error| format!("could not build the preview window {label:?}: {error}"))
 }
 

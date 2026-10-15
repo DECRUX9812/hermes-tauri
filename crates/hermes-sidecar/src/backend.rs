@@ -137,7 +137,7 @@ impl Process {
     fn wait_until_gone(&mut self, timeout: Duration) -> Result<bool, SidecarError> {
         let deadline = Instant::now() + timeout;
         loop {
-            if self.poll_exit()?.is_some() && !self.group.has_members() {
+            if self.poll_exit()?.is_some() && !self.group.has_live_members() {
                 return Ok(true);
             }
             if Instant::now() >= deadline {

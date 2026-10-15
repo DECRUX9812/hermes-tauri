@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc, Mutex, MutexGuard,
@@ -11,12 +12,14 @@ use hermes_sidecar::{redact, Backend, Phase, SidecarConfig};
 use serde::Serialize;
 use tauri::{ipc::CapabilityBuilder, AppHandle, Emitter, Manager, State, Url};
 
-/// Attach-only configurations never spawn: without this, an unreachable
-/// attach target would surface the sidecar's "needs a command" error instead
-/// of "not responding". A config file may set both `url` and `command` and
-/// keep the fall-back-to-spawn semantics.
 const PENDING_ROUTE_POLL: Duration = Duration::from_millis(250);
 const PENDING_ROUTE_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long shutdown waits for a cancelled attempt to finish killing the
+/// spawned process group. The attempt polls the cancel flag every 50 ms and
+/// the health probe at most every 1 s (HEALTH_PROBE_TIMEOUT in
+/// hermes-sidecar), so 5 s comfortably bounds one probe plus the SIGKILL and
+/// reap of the group.
+const ATTEMPT_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -104,6 +107,13 @@ struct Inner {
     shutdown: bool,
     /// Stop signal for the connection attempt in flight (fresh per attempt).
     cancel: hermes_sidecar::Cancel,
+    /// Signalled by the attempt thread once it has finished (and the spawned
+    /// process group, if any, has been killed) after a shutdown cancel.
+    attempt_done_rx: Option<mpsc::Receiver<()>>,
+    /// True from the moment the launch URL (which carries the session token
+    /// in its fragment) is navigated to until the page has consumed the
+    /// token. Deep-link routes wait for it (review F1).
+    launching: bool,
 }
 
 /// Runs the sidecar and owns the connected `Backend` until exit.
@@ -131,6 +141,8 @@ impl BootManager {
                 pending_route: None,
                 shutdown: false,
                 cancel: hermes_sidecar::Cancel::new(),
+                attempt_done_rx: None,
+                launching: false,
             })),
             generation: Arc::new(AtomicU64::new(0)),
             resolved: Arc::new(resolved),
@@ -146,8 +158,13 @@ impl BootManager {
             Ok(Resolved::NotConfigured) | Err(_) => return,
         };
         let attempt = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let (done_tx, done_rx) = mpsc::channel();
+        lock(&self.inner).attempt_done_rx = Some(done_rx);
         let manager = self.clone();
-        thread::spawn(move || manager.connect(app, attempt, config));
+        thread::spawn(move || {
+            manager.connect(app, attempt, config);
+            let _ = done_tx.send(());
+        });
     }
 
     /// Runs the connection again from the boot page. When a previous attempt
@@ -156,6 +173,26 @@ impl BootManager {
     /// real.
     pub fn retry(&self, app: AppHandle) -> Result<(), String> {
         let mut inner = lock(&self.inner);
+        if inner.shutdown {
+            return Err("The shell is shutting down".to_owned());
+        }
+        // At most one attempt runs at a time: an attempt still in flight is
+        // cancelled and awaited (bounded) before this one starts, so
+        // shutdown() can never return while an older attempt still runs
+        // (review F2). When no attempt is in flight the receive returns at
+        // once (the sender is already dropped).
+        let previous_cancel = inner.cancel.clone();
+        let previous_done = inner.attempt_done_rx.take();
+        drop(inner);
+        previous_cancel.cancel();
+        if let Some(done) = previous_done {
+            if done.recv_timeout(ATTEMPT_STOP_TIMEOUT) == Err(RecvTimeoutError::Timeout) {
+                log("Warning: the previous connection attempt did not finish in time; a spawned backend may have been left running");
+            }
+        }
+        let mut inner = lock(&self.inner);
+        // Quit may have raced the wait above: never spawn a fresh attempt
+        // during shutdown, or its child could survive the exit (review N3).
         if inner.shutdown {
             return Err("The shell is shutting down".to_owned());
         }
@@ -182,33 +219,40 @@ impl BootManager {
         let attempt = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         inner.status = BootStatus::probing(None);
         inner.cancel = hermes_sidecar::Cancel::new();
+        inner.launching = false;
+        let (done_tx, done_rx) = mpsc::channel();
+        inner.attempt_done_rx = Some(done_rx);
         drop(inner);
 
         let manager = self.clone();
-        thread::spawn(move || manager.connect(app, attempt, config));
+        thread::spawn(move || {
+            manager.connect(app, attempt, config);
+            let _ = done_tx.send(());
+        });
         Ok(())
     }
 
     /// Applies a whitelisted deep-link route: immediately when the backend is
-    /// ready, otherwise remembered and applied once it is. The check and the
-    /// store share one lock with `ready`, so a route seen while connecting is
-    /// never stranded.
+    /// ready and the launch page has consumed its token, otherwise remembered
+    /// and applied once it has. The check and the store share one lock with
+    /// `ready`, so a route seen while connecting is never stranded.
     pub fn apply_route_or_defer(&self, app: &AppHandle, route: &str) -> bool {
         let mut inner = lock(&self.inner);
-        match inner.origin.clone() {
-            Some(origin) => {
-                drop(inner);
-                self.apply_route(app, &origin, route);
-                true
-            }
-            None => {
-                if inner.shutdown {
-                    return false;
-                }
-                inner.pending_route = Some(route.to_owned());
-                false
-            }
+        // While the launch page may still hold the session token in its
+        // fragment, every route goes through the deferred path, which waits
+        // until the token is consumed. Applying one immediately would
+        // navigate away from the token-bearing launch page and lose the
+        // session (review F1).
+        if let Some(origin) = immediate_route_origin(inner.origin.as_deref(), inner.launching) {
+            drop(inner);
+            self.apply_route(app, &origin, route);
+            return true;
         }
+        if inner.shutdown {
+            return false;
+        }
+        inner.pending_route = Some(route.to_owned());
+        false
     }
 
     pub fn origin(&self) -> Option<String> {
@@ -220,14 +264,24 @@ impl BootManager {
     /// alone; a backend still connecting is cancelled and its spawned process
     /// group killed. Blocks while a process group is stopping.
     pub fn shutdown(&self) {
-        let (backend, cancel) = {
+        let (backend, attempt_done) = {
             let mut inner = lock(&self.inner);
+            if inner.shutdown {
+                return;
+            }
             inner.shutdown = true;
             inner.pending_route = None;
             inner.cancel.cancel();
-            (inner.backend.take(), inner.cancel.clone())
+            (inner.backend.take(), inner.attempt_done_rx.take())
         };
-        drop(cancel);
+        // The attempt thread observes the cancel within one poll interval and
+        // drops the spawned process group, which kills it. Wait for that
+        // before the process exits, or the child is orphaned (review H1).
+        if let Some(done) = attempt_done {
+            if done.recv_timeout(ATTEMPT_STOP_TIMEOUT) == Err(RecvTimeoutError::Timeout) {
+                log("Warning: the connection attempt did not finish in time; a spawned backend may have been left running");
+            }
+        }
         let Some(backend) = backend else {
             log("Hermes backend stopped (nothing was connected)");
             return;
@@ -339,14 +393,17 @@ impl BootManager {
             }
             inner.backend = Some(backend);
             inner.origin = Some(origin.clone());
+            inner.launching = true;
         }
         self.navigate_main(&app, url, None);
 
-        let pending = lock(&self.inner).pending_route.take();
-        if let Some(route) = pending {
-            let manager = self.clone();
-            thread::spawn(move || manager.apply_pending_route(app, origin, route));
-        }
+        // Watch the launch page until the token is consumed, then apply a
+        // deep link seen in the meantime (F1). Always spawned, so `launching`
+        // is cleared even when no route is pending. The route is drained
+        // under the lock at consumption time, not captured here, so a link
+        // arriving after the spawn is not stranded (review N2).
+        let manager = self.clone();
+        thread::spawn(move || manager.apply_pending_route(app, origin));
     }
 
     /// Waits for the main webview to finish loading the launch URL, then
@@ -360,7 +417,7 @@ impl BootManager {
     /// a same-document hash change on top and cannot race the token read.
     /// (Waiting for the origin alone was not enough: the navigation commits
     /// before the page's scripts run.)
-    fn apply_pending_route(self, app: AppHandle, origin: String, route: String) {
+    fn apply_pending_route(self, app: AppHandle, origin: String) {
         let deadline = std::time::Instant::now() + PENDING_ROUTE_TIMEOUT;
         loop {
             if self.is_shutting_down() {
@@ -377,11 +434,32 @@ impl BootManager {
                             .contains("hermes-session=")
                 });
             if loaded {
-                self.apply_route(&app, &origin, &route);
+                let mut inner = lock(&self.inner);
+                if inner.origin.as_deref() != Some(origin.as_str()) {
+                    // A superseded attempt's watcher: leave `launching` and
+                    // the pending route to the current attempt.
+                    return;
+                }
+                inner.launching = false;
+                // Drain under the lock: a link may have arrived after this
+                // watcher was spawned (review N2).
+                let route = inner.pending_route.take();
+                drop(inner);
+                if let Some(route) = route {
+                    self.apply_route(&app, &origin, &route);
+                }
                 return;
             }
             if std::time::Instant::now() >= deadline {
-                log("Ignored a deep link: Hermes did not finish loading within 30 s");
+                let mut inner = lock(&self.inner);
+                if inner.origin.as_deref() == Some(origin.as_str()) {
+                    inner.launching = false;
+                }
+                let route = inner.pending_route.take();
+                drop(inner);
+                if route.is_some() {
+                    log("Ignored a deep link: Hermes did not finish loading within 30 s");
+                }
                 return;
             }
             thread::sleep(PENDING_ROUTE_POLL);
@@ -483,4 +561,36 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Whether a deep-link route arriving now can be applied at once, and on
+/// which origin: only when the backend origin is known and the launch page
+/// has consumed its session token. Pure so it is testable without GTK.
+fn immediate_route_origin(origin: Option<&str>, launching: bool) -> Option<String> {
+    if launching {
+        return None;
+    }
+    origin.map(str::to_owned)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::immediate_route_origin;
+
+    const ORIGIN: &str = "http://127.0.0.1:18810";
+
+    #[test]
+    fn a_route_is_immediate_only_after_the_token_is_consumed() {
+        // No backend origin yet: deferred.
+        assert_eq!(immediate_route_origin(None, false), None);
+        assert_eq!(immediate_route_origin(None, true), None);
+        // Origin known but the launch page may still carry the token (F1):
+        // deferred.
+        assert_eq!(immediate_route_origin(Some(ORIGIN), true), None);
+        // Origin known, token consumed: immediate.
+        assert_eq!(
+            immediate_route_origin(Some(ORIGIN), false),
+            Some(ORIGIN.to_owned())
+        );
+    }
 }

@@ -22,14 +22,14 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 TEST_HERMES="$SCRIPT_DIR/test-hermes.sh"
 
 DEFAULT_BIN="$HOME/.cache/hermes-tauri/target/release/hermes-tauri"
-DEFAULT_OUT=/tmp/hermes-tauri-t6p/shots
+DEFAULT_OUT=/tmp/hermes-tauri-t6g/shots
 DEFAULT_PORT_DIR=/tmp/hermes-tauri-test-proof
 WORK=/tmp/hermes-tauri-proof-work
 
 SCREEN="1440x900x24"
 WINDOW_TITLE="Hermes Tauri"
 WINDOW_SIZE="1280x820"
-BOTS_TAB="168,37"                  # sidebar Sessions|Bots toggle, window at 0,0
+BOTS_TAB="190,48"                  # sidebar Sessions|Bots toggle, window at 0,0
 PARK="600,300"                     # neutral pointer parking spot
 DEEPLINK_SHOT_ROUTE="/studio"      # 08-deeplink: a route no earlier shot used
 MIN_COLOURS=12                     # painted app pages score well above this
@@ -504,7 +504,7 @@ inner_main() {
   xdotool mousemove --sync "${PARK%,*}" "${PARK#*,}" 2>/dev/null || true
   sleep 1
   shot 06-reload-before "$MIN_COLOURS" \
-    "the /team route before the reload"
+    "the group chat route before the reload"
   xdotool windowfocus "$(window_id)" 2>/dev/null || true
   xdotool key --clearmodifiers F5
   # A reload must show the webview's loading state before it paints again, so
@@ -544,25 +544,65 @@ nav_shot() {
   shot "$name" "$min" "$desc"
 }
 
-# 05-group-chat: the seeded room. The app pulls the room projection once, at
-# plugin registration, before its gateway exists (docs/test-hermes.md), so a
-# fresh profile has no room row to open. The shot reports that honestly instead
-# of building a lookalike room and pretending it was the seeded one.
+# 05-group-chat: a group chat created through the UI with demo bots and a neutral
+# message submitted to the active room transcript.
 group_chat_shot() {
-  local reason
-  xdotool windowfocus "$(window_id)" 2>/dev/null || true
-  xdotool mousemove --sync "${BOTS_TAB%,*}" "${BOTS_TAB#*,}" 2>/dev/null || true
+  local wid
+  wid="$(window_id)"
+  xdotool windowfocus "$wid" 2>/dev/null || true
+
+  # 1. Switch sidebar to Bots tab
+  xdotool mousemove --sync 190 48 2>/dev/null || true
   xdotool click 1
-  sleep 3
-  reason="the seeded \"Demo Product Room\" never reaches the UI (docs/test-hermes.md: the room projection is pulled before the gateway exists), so no real click can open it"
-  if webview_state_mentions demo-product-room; then
-    reason="the seeded room is in this profile's room cache, but this driver has no verified click target for a room row"
-  fi
-  if capture 05-group-chat; then
-    record 05-group-chat FAIL "$CAP_COLOURS" "$CAP_MD5" "$reason"
-  else
-    record 05-group-chat FAIL "-" "-" "$reason (the screen could not be captured)"
-  fi
+  sleep 1.5
+
+  # 2. Click '+' button to open dropdown menu
+  xdotool mousemove --sync 259 85 2>/dev/null || true
+  xdotool click 1
+  sleep 1.5
+
+  # 3. Click "New group chat" in dropdown menu
+  xdotool mousemove --sync 180 142 2>/dev/null || true
+  xdotool click 1
+  sleep 2.0
+
+  # 4. In the dialog, select the first demo bot
+  xdotool mousemove --sync 550 474 2>/dev/null || true
+  xdotool click 1
+  sleep 1.2
+
+  # 5. Select the second demo bot (shifted down by selection badge mounting)
+  xdotool mousemove --sync 550 590 2>/dev/null || true
+  xdotool click 1
+  sleep 1.2
+
+  # 6. Click "Create Group (2)" button
+  xdotool mousemove --sync 785 728 2>/dev/null || true
+  xdotool click 1
+  sleep 3.0
+
+  # 7. Focus composer textarea at (500, 710), clear draft, type and submit
+  xdotool mousemove --sync 500 710 2>/dev/null || true
+  xdotool click 1
+  sleep 0.5
+  xdotool key --clearmodifiers ctrl+a
+  sleep 0.2
+  xdotool key BackSpace
+  sleep 0.2
+  xdotool type --delay 15 "Demo: please summarize the launch checklist"
+  sleep 1.5
+  xdotool key Return
+  sleep 1.0
+  xdotool mousemove --sync 1156 732 2>/dev/null || true
+  xdotool click 1
+  sleep 3.0
+
+  # 8. Park cursor
+  xdotool mousemove --sync "${PARK%,*}" "${PARK#*,}" 2>/dev/null || true
+  sleep 1.0
+
+  shot 05-group-chat "$MIN_COLOURS" \
+    "a group chat created through the UI with two demo bots and one submitted neutral message"
 }
 
 # ── spawn mode ───────────────────────────────────────────────────────────────

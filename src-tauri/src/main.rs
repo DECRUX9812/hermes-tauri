@@ -73,6 +73,17 @@ fn main() {
                     .on_navigation(move |url| {
                         let backend_origin =
                             navigation_app.state::<sidecar::BootManager>().origin();
+                        // Every main-window navigation is logged with the
+                        // token redacted; a same-URL repeat is the reload
+                        // proof (review item 7).
+                        if backend_origin.as_deref()
+                            == Some(url.origin().ascii_serialization().as_str())
+                        {
+                            sidecar::log(&format!(
+                                "Main window navigation: {}",
+                                hermes_sidecar::redact(url.as_str())
+                            ));
+                        }
                         guard::handle_navigation(&navigation_app, url, backend_origin.as_deref())
                     })
                     .on_new_window(move |url, features| {
