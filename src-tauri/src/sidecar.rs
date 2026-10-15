@@ -18,7 +18,7 @@ use tauri::{ipc::CapabilityBuilder, AppHandle, Emitter, Manager, State, Url};
 const PENDING_ROUTE_POLL: Duration = Duration::from_millis(250);
 const PENDING_ROUTE_TIMEOUT: Duration = Duration::from_secs(30);
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum BootPhase {
     NoConfig,
@@ -102,6 +102,8 @@ struct Inner {
     /// A deep-link hash route seen before the backend was ready.
     pending_route: Option<String>,
     shutdown: bool,
+    /// Stop signal for the connection attempt in flight (fresh per attempt).
+    cancel: hermes_sidecar::Cancel,
 }
 
 /// Runs the sidecar and owns the connected `Backend` until exit.
@@ -128,6 +130,7 @@ impl BootManager {
                 origin: None,
                 pending_route: None,
                 shutdown: false,
+                cancel: hermes_sidecar::Cancel::new(),
             })),
             generation: Arc::new(AtomicU64::new(0)),
             resolved: Arc::new(resolved),
@@ -147,15 +150,27 @@ impl BootManager {
         thread::spawn(move || manager.connect(app, attempt, config));
     }
 
-    /// Runs the connection again from the boot page. Never spawns a second
-    /// backend behind an already-connected one.
+    /// Runs the connection again from the boot page. When a previous attempt
+    /// left a stored backend behind an unreachable status (a capability or
+    /// navigation failure after connect), it is dropped so this attempt is
+    /// real.
     pub fn retry(&self, app: AppHandle) -> Result<(), String> {
         let mut inner = lock(&self.inner);
-        if inner.backend.is_some() {
-            return Ok(());
-        }
         if inner.shutdown {
             return Err("The shell is shutting down".to_owned());
+        }
+        if inner.backend.is_some() {
+            if inner.status.phase != BootPhase::Unreachable {
+                return Ok(());
+            }
+            // A backend whose post-connect work failed is stopped (an
+            // attached one is left alone) before reconnecting.
+            if let Some(backend) = inner.backend.take() {
+                inner.origin = None;
+                drop(inner);
+                self.stop_backend(backend);
+                inner = lock(&self.inner);
+            }
         }
         let config = match self.resolved.as_ref() {
             Ok(Resolved::Configured { config, .. }) => config.clone(),
@@ -166,6 +181,7 @@ impl BootManager {
         };
         let attempt = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         inner.status = BootStatus::probing(None);
+        inner.cancel = hermes_sidecar::Cancel::new();
         drop(inner);
 
         let manager = self.clone();
@@ -173,10 +189,26 @@ impl BootManager {
         Ok(())
     }
 
-    /// A deep-link route requested while the backend was still connecting.
-    /// Applied once the main webview is on the backend origin.
-    pub fn set_pending_route(&self, route: String) {
-        lock(&self.inner).pending_route = Some(route);
+    /// Applies a whitelisted deep-link route: immediately when the backend is
+    /// ready, otherwise remembered and applied once it is. The check and the
+    /// store share one lock with `ready`, so a route seen while connecting is
+    /// never stranded.
+    pub fn apply_route_or_defer(&self, app: &AppHandle, route: &str) -> bool {
+        let mut inner = lock(&self.inner);
+        match inner.origin.clone() {
+            Some(origin) => {
+                drop(inner);
+                self.apply_route(app, &origin, route);
+                true
+            }
+            None => {
+                if inner.shutdown {
+                    return false;
+                }
+                inner.pending_route = Some(route.to_owned());
+                false
+            }
+        }
     }
 
     pub fn origin(&self) -> Option<String> {
@@ -184,19 +216,26 @@ impl BootManager {
     }
 
     /// Stops the backend exactly once. Runs on the exit paths (window close
-    /// without a tray, tray Quit, Ctrl+C/SIGTERM); attached backends are left
-    /// alone. Blocks while the process group is stopping gracefully.
+    /// without a tray, tray Quit, Ctrl+C/SIGTERM). Attached backends are left
+    /// alone; a backend still connecting is cancelled and its spawned process
+    /// group killed. Blocks while a process group is stopping.
     pub fn shutdown(&self) {
-        let backend = {
+        let (backend, cancel) = {
             let mut inner = lock(&self.inner);
             inner.shutdown = true;
             inner.pending_route = None;
-            inner.backend.take()
+            inner.cancel.cancel();
+            (inner.backend.take(), inner.cancel.clone())
         };
+        drop(cancel);
         let Some(backend) = backend else {
-            log("Hermes backend already stopped or was never connected");
+            log("Hermes backend stopped (nothing was connected)");
             return;
         };
+        self.stop_backend(backend);
+    }
+
+    fn stop_backend(&self, backend: Backend) {
         match backend.shutdown() {
             Ok(report) => log(&format!("Hermes backend stopped: {report:?}")),
             Err(error) => log(&format!("Error while stopping Hermes: {error}")),
@@ -210,22 +249,41 @@ impl BootManager {
         if let Some(path) = self.log_path.as_ref() {
             config.log_path = Some(path.clone());
         }
-        log(&format!("Connecting to Hermes (config {config:?})"));
+        // Mode, program and argument count only: the argv itself can carry
+        // secrets and must not reach the log.
+        let mode = if config.attach_url.is_some() {
+            "attach"
+        } else {
+            "spawn"
+        };
+        let program = config
+            .command
+            .first()
+            .map(String::as_str)
+            .unwrap_or("(none)");
+        log(&format!(
+            "Connecting to Hermes (mode {mode}, program {program:?}, {} arguments)",
+            config.command.len().saturating_sub(1)
+        ));
 
+        let cancel = lock(&self.inner).cancel.clone();
         let manager = self.clone();
         let phase_app = app.clone();
-        let result = hermes_sidecar::connect(&config, |phase| {
-            manager.on_phase(phase_app.clone(), attempt, &phase);
-        });
+        let result = hermes_sidecar::connect_with_cancel(
+            &config,
+            |phase| {
+                manager.on_phase(phase_app.clone(), attempt, &phase);
+            },
+            &cancel,
+        );
 
         match result {
             Ok(backend) => self.ready(app, attempt, backend),
             Err(error) => {
+                let message = redact(&error.to_string());
+                log(&format!("Hermes connection failed: {message}"));
                 if self.is_current(attempt) && !self.is_shutting_down() {
-                    self.set_status(
-                        &app,
-                        BootStatus::unreachable(None, redact(&error.to_string())),
-                    );
+                    self.set_status(&app, BootStatus::unreachable(None, message));
                 }
             }
         }
@@ -239,32 +297,26 @@ impl BootManager {
     }
 
     fn ready(&self, app: AppHandle, attempt: u64, backend: Backend) {
-        let mut inner = lock(&self.inner);
-        if self.generation.load(Ordering::SeqCst) != attempt || inner.shutdown {
-            drop(inner);
+        if !self.is_current(attempt) || self.is_shutting_down() {
             // A superseded attempt or an exit never adopts a backend: an
             // attached one is a no-op, a spawned one is killed.
-            match backend.shutdown() {
-                Ok(report) => log(&format!("Discarded superseded backend: {report:?}")),
-                Err(error) => log(&format!("Error discarding superseded backend: {error}")),
-            }
+            self.stop_backend(backend);
             return;
         }
 
+        // Post-connect work runs BEFORE the backend is stored: when it fails,
+        // no backend is kept and Retry reconnects (M3).
         let launch_url = backend.launch_url().to_owned();
         let origin = backend.origin().to_owned();
-        inner.backend = Some(backend);
-        inner.origin = Some(origin.clone());
-        inner.status = BootStatus::ready(origin.clone());
-        drop(inner);
-
         self.set_status(&app, BootStatus::ready(origin.clone()));
+        log(&format!("Hermes backend ready at {origin}"));
         if let Err(error) = self.add_remote_capability(&app, &origin) {
             self.set_status(&app, BootStatus::unreachable(Some(origin), error));
+            self.stop_backend(backend);
             return;
         }
-        match Url::parse(&launch_url) {
-            Ok(url) => self.navigate_main(&app, url, None),
+        let url = match Url::parse(&launch_url) {
+            Ok(url) => url,
             Err(error) => {
                 self.set_status(
                     &app,
@@ -273,9 +325,22 @@ impl BootManager {
                         format!("Invalid Hermes launch link: {error}"),
                     ),
                 );
+                self.stop_backend(backend);
                 return;
             }
+        };
+
+        {
+            let mut inner = lock(&self.inner);
+            if inner.shutdown || self.generation.load(Ordering::SeqCst) != attempt {
+                drop(inner);
+                self.stop_backend(backend);
+                return;
+            }
+            inner.backend = Some(backend);
+            inner.origin = Some(origin.clone());
         }
+        self.navigate_main(&app, url, None);
 
         let pending = lock(&self.inner).pending_route.take();
         if let Some(route) = pending {
@@ -284,26 +349,43 @@ impl BootManager {
         }
     }
 
-    /// Waits for the main webview to reach the backend origin, then applies
-    /// the pending deep-link route. The first navigation after connect carries
-    /// the session token; the route is a same-document hash change on top.
+    /// Waits for the main webview to finish loading the launch URL, then
+    /// applies the pending deep-link route.
+    ///
+    /// Race-free because the route is only applied once the URL fragment no
+    /// longer carries `#hermes-session=`: the page's bootstrap consumes that
+    /// fragment into web-local storage and then strips it with
+    /// `history.replaceState` (`browser-launch-session.ts`), so a
+    /// fragment-free URL proves the token has already been read. The route is
+    /// a same-document hash change on top and cannot race the token read.
+    /// (Waiting for the origin alone was not enough: the navigation commits
+    /// before the page's scripts run.)
     fn apply_pending_route(self, app: AppHandle, origin: String, route: String) {
         let deadline = std::time::Instant::now() + PENDING_ROUTE_TIMEOUT;
-        while std::time::Instant::now() < deadline {
+        loop {
             if self.is_shutting_down() {
                 return;
             }
-            if app
+            let loaded = app
                 .get_webview_window("main")
                 .and_then(|window| window.url().ok())
-                .is_some_and(|url| url.origin().ascii_serialization() == origin)
-            {
+                .is_some_and(|url| {
+                    url.origin().ascii_serialization() == origin
+                        && !url
+                            .fragment()
+                            .unwrap_or_default()
+                            .contains("hermes-session=")
+                });
+            if loaded {
                 self.apply_route(&app, &origin, &route);
+                return;
+            }
+            if std::time::Instant::now() >= deadline {
+                log("Ignored a deep link: Hermes did not finish loading within 30 s");
                 return;
             }
             thread::sleep(PENDING_ROUTE_POLL);
         }
-        log("Ignored a deep link: Hermes did not finish loading within 30 s");
     }
 
     /// Navigates the main webview to `<origin>/<hash>`, for example
@@ -344,24 +426,15 @@ impl BootManager {
         }
 
         // The runtime capability is the IPC boundary: scoped to the exact
-        // backend origin, on the main webview only, and limited to the
-        // commands and plugin permissions the UI actually uses.
+        // backend origin, on the main webview only, and limited to the three
+        // native commands the adapter overlays. The plugins behind them are
+        // called from Rust; the frontend gets no plugin permissions.
         let capability = CapabilityBuilder::new("hermes-backend")
             .remote(format!("{origin}/*"))
             .window("main")
             .permission("allow-native-open-external")
             .permission("allow-native-notify")
-            .permission("allow-native-select-paths")
-            .permission("notification:default")
-            .permission("dialog:allow-open")
-            .permission_scoped(
-                "opener:allow-open-url",
-                vec![
-                    serde_json::json!({ "url": "http://**" }),
-                    serde_json::json!({ "url": "https://**" }),
-                ],
-                Vec::<serde_json::Value>::new(),
-            );
+            .permission("allow-native-select-paths");
         app.add_capability(capability)
             .map_err(|error| format!("Could not grant Hermes native capabilities: {error}"))?;
         *added = Some(origin.to_owned());

@@ -23,3 +23,5 @@ tauri-plugin-opener = "2"
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 tauri-plugin-updater = "2"
 ctrlc = { version = "3", features = ["termination"] }
+# Pin: tauri-plugin-deep-link 2.6.2 does not compile against rust-ini 0.21.3.
+rust-ini = "=0.21.1"

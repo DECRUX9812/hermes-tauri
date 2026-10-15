@@ -7,24 +7,29 @@ use crate::sidecar::{self, BootManager};
 /// Whitelisted routes map to their hash path; anything else is ignored and
 /// logged. Returns whether the link was recognized.
 pub fn handle_url(app: &AppHandle, url: &str) -> bool {
+    let Some(manager) = app.try_state::<BootManager>() else {
+        // A launch can arrive while the first instance is still in setup.
+        sidecar::log(&format!(
+            "Ignored deep link {url:?}: the shell is still starting"
+        ));
+        return false;
+    };
     match hermes_shell_config::parse(url) {
         Ok(route) => {
-            let manager = app.state::<BootManager>();
-            match manager.origin() {
-                Some(origin) => manager.apply_route(app, &origin, route.hash()),
-                None => {
-                    sidecar::log(&format!(
-                        "Deep link {url:?} seen while Hermes is still starting; applying it when ready"
-                    ));
-                    manager.set_pending_route(route.hash().to_owned());
-                }
-            }
+            manager.apply_route_or_defer(app, route.hash());
             true
         }
         Err(error) => {
             sidecar::log(&format!("Ignored deep link {url:?}: {error}"));
             false
         }
+    }
+}
+
+/// Forwards deep-link arguments of a second launch (single-instance callback).
+pub fn handle_args(app: &AppHandle, args: &[String]) {
+    if let Some(url) = hermes_shell_config::from_args(args) {
+        handle_url(app, url);
     }
 }
 
@@ -38,14 +43,5 @@ pub fn init(app: &AppHandle) {
         }
     });
 
-    let mut found = None;
-    for argument in std::env::args().skip(1) {
-        if let Some(url) = hermes_shell_config::from_args(std::slice::from_ref(&argument)) {
-            found = Some(url.to_owned());
-            break;
-        }
-    }
-    if let Some(url) = found {
-        handle_url(app, &url);
-    }
+    handle_args(app, &std::env::args().skip(1).collect::<Vec<String>>());
 }

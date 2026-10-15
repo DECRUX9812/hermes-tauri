@@ -3,7 +3,7 @@ mod common;
 use std::time::{Duration, Instant};
 
 use common::*;
-use hermes_sidecar::{connect, Phase, ShutdownReport, SidecarError};
+use hermes_sidecar::{connect, connect_with_cancel, Cancel, Phase, ShutdownReport, SidecarError};
 
 #[test]
 fn spawned_group_including_grandchild_is_reaped_on_shutdown() {
@@ -151,6 +151,45 @@ fn dropping_backend_without_shutdown_kills_the_group() {
     assert!(
         wait_until_dead(grandchild, Duration::from_secs(5)),
         "grandchild survived drop"
+    );
+    let _ = std::fs::remove_file(log);
+}
+
+#[test]
+fn cancelling_a_slow_spawn_kills_the_child_quickly() {
+    let log = log_path("cancel");
+    let cfg = base_config(
+        fixture_command(&["--token", TOKEN, "--delay-ready", "30"]),
+        &log,
+    );
+    let cancel = Cancel::new();
+    let handle = std::thread::spawn({
+        let cfg = cfg.clone();
+        let cancel = cancel.clone();
+        move || connect_with_cancel(&cfg, |_| {}, &cancel)
+    });
+
+    // Quit while the backend is still starting, as the shell does on exit.
+    let pids = wait_for_pids(&log, false);
+    cancel.cancel();
+
+    let started = Instant::now();
+    let err = handle
+        .join()
+        .expect("connect thread")
+        .expect_err("cancelled");
+    assert!(
+        matches!(err, SidecarError::Cancelled),
+        "expected Cancelled, got {err:?}"
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "cancel took {:?}",
+        started.elapsed()
+    );
+    assert!(
+        wait_until_dead(pids.main, Duration::from_secs(5)),
+        "child survived cancel"
     );
     let _ = std::fs::remove_file(log);
 }

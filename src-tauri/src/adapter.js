@@ -48,6 +48,23 @@
     }
   };
 
+  // WebKitGTK has no default reload accelerator (Electron reloads on F5 and
+  // Ctrl/Cmd+R). Reload http(s) pages only, and never during IME composition.
+  window.addEventListener(
+    'keydown',
+    event => {
+      if (event.isComposing || event.keyCode === 229) return;
+      const reload =
+        event.key === 'F5' ||
+        ((event.ctrlKey || event.metaKey) && (event.key === 'r' || event.key === 'R'));
+      if (reload) {
+        event.preventDefault();
+        location.reload();
+      }
+    },
+    { capture: true }
+  );
+
   let installedBridge;
   Object.defineProperty(window, 'hermesDesktop', {
     configurable: true,

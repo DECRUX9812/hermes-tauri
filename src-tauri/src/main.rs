@@ -10,6 +10,7 @@ mod tray;
 mod updater;
 
 use tauri::{webview::WebviewWindowBuilder, Manager, RunEvent, WebviewUrl, WindowEvent};
+use tauri_plugin_notification::NotificationExt;
 
 fn main() {
     #[cfg(target_os = "linux")]
@@ -23,9 +24,7 @@ fn main() {
     let result = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             tray::show_window(app);
-            if let Some(url) = hermes_shell_config::from_args(&args) {
-                deeplink::handle_url(app, url);
-            }
+            deeplink::handle_args(app, &args);
         }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
@@ -43,6 +42,16 @@ fn main() {
             let handle = app.handle().clone();
             let settings = config::load(handle.path().app_config_dir().ok());
             let log_dir = handle.path().app_log_dir().ok();
+            if let Some(dir) = &log_dir {
+                // The sidecar crate appends to a log in here; the dir does not
+                // exist on a fresh install.
+                if let Err(error) = std::fs::create_dir_all(dir) {
+                    sidecar::log(&format!(
+                        "Could not create the log directory {}: {error}",
+                        dir.display()
+                    ));
+                }
+            }
 
             app.manage(tray::TrayState::default());
             let manager = sidecar::BootManager::new(
@@ -66,14 +75,20 @@ fn main() {
                             navigation_app.state::<sidecar::BootManager>().origin();
                         guard::handle_navigation(&navigation_app, url, backend_origin.as_deref())
                     })
-                    .on_new_window(move |url, _features| {
+                    .on_new_window(move |url, features| {
                         let backend_origin =
                             new_window_app.state::<sidecar::BootManager>().origin();
-                        guard::handle_new_window(&new_window_app, url, backend_origin.as_deref())
+                        guard::handle_new_window(
+                            &new_window_app,
+                            url,
+                            features,
+                            backend_origin.as_deref(),
+                        )
                     })
                     .build()?;
 
             let close_app = handle.clone();
+            let close_notified = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
             window.on_window_event(move |event| {
                 if let WindowEvent::CloseRequested { api, .. } = event {
                     if tray::available(&close_app) {
@@ -81,6 +96,20 @@ fn main() {
                         api.prevent_close();
                         let _ = close_app.get_webview_window("main").map(|w| w.hide());
                         sidecar::log("Window closed to the tray");
+                        // A user without a visible tray icon still gets told
+                        // once how to get back (relaunching also shows it via
+                        // single-instance).
+                        if !close_notified.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                            if let Err(error) = close_app
+                                .notification()
+                                .builder()
+                                .title("Hermes Tauri")
+                                .body("Hermes is still running in the tray.")
+                                .show()
+                            {
+                                sidecar::log(&format!("Could not show the tray notice: {error}"));
+                            }
+                        }
                     }
                 }
             });

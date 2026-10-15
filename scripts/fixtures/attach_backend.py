@@ -49,9 +49,23 @@ PAGE = b"""<!doctype html>
       `<p>typeof window.hermesDesktop.openExternal: <code>${typeof bridge.openExternal}</code></p>`,
       `<p>Native host: <code>${document.documentElement.dataset.hermesNativeHost || 'missing'}</code></p>`,
       `<p>Notify overlay native: <code>${bridge.notify !== fixtureBrowserNotify ? 'yes' : 'no'}</code></p>`,
+      `<p>selectPaths overlay: <code>${typeof bridge.selectPaths}</code></p>`,
+      `<p>requestIdleCallback: <code>${typeof requestIdleCallback === 'function' ? 'function' : typeof requestIdleCallback}</code></p>`,
+      `<p>cancelIdleCallback: <code>${typeof cancelIdleCallback === 'function' ? 'function' : typeof cancelIdleCallback}</code></p>`,
+      `<p>notify() result: <code id="notify-result">pending</code></p>`,
       `<p>srcdoc iframe loaded: <code id="srcdoc-state">pending</code></p>`,
       `<p>same-origin iframe loaded: <code id="same-origin-state">pending</code></p>`
     ].join('');
+    // Exercises the shell notification path end to end: the adapter overlays
+    // hermesDesktop.notify, the command calls the notification plugin, and
+    // the boolean the bridge returns is displayed here.
+    bridge.notify({ title: 'Hermes Tauri', body: 'Fixture notification' })
+      .then(result => {
+        document.querySelector('#notify-result').textContent = String(result);
+      })
+      .catch(error => {
+        document.querySelector('#notify-result').textContent = `error: ${error}`;
+      });
     const probeFrame = (stateId, configure) => {
       const frame = document.createElement('iframe');
       frame.hidden = true;
