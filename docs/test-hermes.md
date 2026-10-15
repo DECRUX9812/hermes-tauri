@@ -116,3 +116,15 @@ Because the room does not hydrate in a clean browser session without local stora
 - The `.catch(() => false)` in `plugin.tsx:442` swallows this error.
 - Later, `host.state.gateway.listen(handleSessionsGatewayTransition)` (`apps/desktop/src/plugins/hermes-bots/plugin.tsx:459`) listens for gateway state changes, but `handleSessionsGatewayTransition` (`apps/desktop/src/plugins/hermes-bots/group-chat.ts:1426-1447`) does not initiate a pull for the active connection, and the initial gateway connection transition is replayed before `$gateway` is set.
 - Consequently, on a fresh browser boot, the remote group chat snapshot is never pulled from the server mirror, leaving the group chat unhydrated until local storage is manually modified or populated.
+- Furthermore, even when `pullGroupChatServerState()` is triggered after the gateway connects (e.g., in a warm profile or upon reconnect in `group-chat.ts:1444`), line 1060 calls `await host.profileRoutes()`. In `apps/desktop/src/sdk/index.ts:1642-1648`, `host.profileRoutes()` unconditionally throws `Error('Hermes Desktop connection routing unavailable')` because `window.hermesDesktop?.getProfileRoutes` is an Electron-only API absent in Tauri. This unhandled rejection causes `pullGroupChatServerState` to abort and return null, preventing server room sync from populating local rooms. (Smallest fix: wrap `host.profileRoutes()` in `try/catch` with a fallback to empty routes, identical to line 1163).
+
+### Working UI creation path and diagnosis of T6p failure
+In `proof.sh` step 05, creating a group chat through the UI works reliably:
+1. Switch to the Bots tab at `(190, 48)` (not (168, 37), which misses the active pill).
+2. Click the `+` menu trigger at `(259, 85)` and select "New group chat" at `(180, 142)`.
+3. Select Bot 1 at `(550, 474)`.
+4. In `create-dialog.tsx:1434-1465`, selecting Bot 1 mounts `<div className="flex flex-wrap gap-1">` (selection badge) and `<GroupRoleSelects>` above the bot list, dynamically shifting the bot list down by ~100px. T6p clicked the unshifted Bot 2 coordinate, clicking empty space, leaving only 1 bot selected. Because `canCreate = selected.length >= 2` (`create-dialog.tsx:1352`) and `<Button disabled={!canCreate}>` has `disabled:pointer-events-none` (`button.tsx:15`), T6p's click on Create Group was dropped.
+5. Clicking Bot 2 at the shifted coordinate `(550, 590)` successfully selects 2 bots, activating `Create Group (2)` at `(785, 728)`.
+6. Clicking `(785, 728)` mints a room ID, saves the room to local storage (`$groupChats`), and opens the group chat workspace.
+7. Clicking the composer textarea at `(500, 710)`, clearing the draft, typing `"Demo: please summarize the launch checklist"`, and pressing `Return` submits the message, starting the live room round and displaying the bot's working state.
+
