@@ -53,6 +53,9 @@ PAGE = b"""<!doctype html>
       `<p>requestIdleCallback: <code>${typeof requestIdleCallback === 'function' ? 'function' : typeof requestIdleCallback}</code></p>`,
       `<p>cancelIdleCallback: <code>${typeof cancelIdleCallback === 'function' ? 'function' : typeof cancelIdleCallback}</code></p>`,
       `<p>notify() result: <code id="notify-result">pending</code></p>`,
+      `<p>openExternal() result: <code id="open-external-result">pending</code></p>`,
+      `<p>selectPaths() result: <code id="select-paths-result">pending</code></p>`,
+      `<p>popup: <code id="popup-result">pending</code></p>`,
       `<p>srcdoc iframe loaded: <code id="srcdoc-state">pending</code></p>`,
       `<p>same-origin iframe loaded: <code id="same-origin-state">pending</code></p>`
     ].join('');
@@ -66,6 +69,34 @@ PAGE = b"""<!doctype html>
       .catch(error => {
         document.querySelector('#notify-result').textContent = `error: ${error}`;
       });
+    // Exercises the native open-external command. The command round-trip is
+    // the point: whatever the OS does with the URL comes back as a result or
+    // a rejection and is displayed.
+    bridge.openExternal('https://example.com/')
+      .then(() => {
+        document.querySelector('#open-external-result').textContent = 'resolved';
+      })
+      .catch(error => {
+        document.querySelector('#open-external-result').textContent = `rejected: ${error}`;
+      });
+    // Exercises the native file-dialog command; the test closes the dialog
+    // with Escape and the cancel result is displayed.
+    bridge.selectPaths({ title: 'Fixture picker' })
+      .then(paths => {
+        document.querySelector('#select-paths-result').textContent = JSON.stringify(paths);
+      })
+      .catch(error => {
+        document.querySelector('#select-paths-result').textContent = `error: ${error}`;
+      });
+    // Exercises the guarded-popup path: a blob: preview on this origin must
+    // open as a shell preview window, and a foreign link inside it must not
+    // navigate that window.
+    const previewSource = `<!doctype html><html><body style="font: 32px sans-serif; display: grid; place-items: center; min-height: 100vh; margin: 0">
+      <a href="https://example.com/" style="padding: 48px; border: 4px solid #555">PREVIEW BLOB - go foreign</a>
+    </body></html>`;
+    const blobUrl = URL.createObjectURL(new Blob([previewSource], { type: 'text/html' }));
+    window.open(blobUrl, '_blank', 'noopener,noreferrer');
+    document.querySelector('#popup-result').textContent = `requested ${blobUrl.slice(0, 24)}…`;
     const probeFrame = (stateId, configure) => {
       const frame = document.createElement('iframe');
       frame.hidden = true;

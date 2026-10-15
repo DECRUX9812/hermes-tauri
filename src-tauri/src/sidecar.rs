@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc, Mutex, MutexGuard,
@@ -17,6 +18,10 @@ use tauri::{ipc::CapabilityBuilder, AppHandle, Emitter, Manager, State, Url};
 /// keep the fall-back-to-spawn semantics.
 const PENDING_ROUTE_POLL: Duration = Duration::from_millis(250);
 const PENDING_ROUTE_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long shutdown waits for a cancelled attempt to finish killing the
+/// spawned process group. The attempt polls the cancel flag every 50 ms and
+/// the health probe at most every second, so a few seconds is generous.
+const ATTEMPT_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -104,6 +109,9 @@ struct Inner {
     shutdown: bool,
     /// Stop signal for the connection attempt in flight (fresh per attempt).
     cancel: hermes_sidecar::Cancel,
+    /// Signalled by the attempt thread once it has finished (and the spawned
+    /// process group, if any, has been killed) after a shutdown cancel.
+    attempt_done_rx: Option<mpsc::Receiver<()>>,
 }
 
 /// Runs the sidecar and owns the connected `Backend` until exit.
@@ -131,6 +139,7 @@ impl BootManager {
                 pending_route: None,
                 shutdown: false,
                 cancel: hermes_sidecar::Cancel::new(),
+                attempt_done_rx: None,
             })),
             generation: Arc::new(AtomicU64::new(0)),
             resolved: Arc::new(resolved),
@@ -146,8 +155,13 @@ impl BootManager {
             Ok(Resolved::NotConfigured) | Err(_) => return,
         };
         let attempt = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let (done_tx, done_rx) = mpsc::channel();
+        lock(&self.inner).attempt_done_rx = Some(done_rx);
         let manager = self.clone();
-        thread::spawn(move || manager.connect(app, attempt, config));
+        thread::spawn(move || {
+            manager.connect(app, attempt, config);
+            let _ = done_tx.send(());
+        });
     }
 
     /// Runs the connection again from the boot page. When a previous attempt
@@ -182,10 +196,15 @@ impl BootManager {
         let attempt = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         inner.status = BootStatus::probing(None);
         inner.cancel = hermes_sidecar::Cancel::new();
+        let (done_tx, done_rx) = mpsc::channel();
+        inner.attempt_done_rx = Some(done_rx);
         drop(inner);
 
         let manager = self.clone();
-        thread::spawn(move || manager.connect(app, attempt, config));
+        thread::spawn(move || {
+            manager.connect(app, attempt, config);
+            let _ = done_tx.send(());
+        });
         Ok(())
     }
 
@@ -220,14 +239,24 @@ impl BootManager {
     /// alone; a backend still connecting is cancelled and its spawned process
     /// group killed. Blocks while a process group is stopping.
     pub fn shutdown(&self) {
-        let (backend, cancel) = {
+        let (backend, attempt_done) = {
             let mut inner = lock(&self.inner);
+            if inner.shutdown {
+                return;
+            }
             inner.shutdown = true;
             inner.pending_route = None;
             inner.cancel.cancel();
-            (inner.backend.take(), inner.cancel.clone())
+            (inner.backend.take(), inner.attempt_done_rx.take())
         };
-        drop(cancel);
+        // The attempt thread observes the cancel within one poll interval and
+        // drops the spawned process group, which kills it. Wait for that
+        // before the process exits, or the child is orphaned (review H1).
+        if let Some(done) = attempt_done {
+            if done.recv_timeout(ATTEMPT_STOP_TIMEOUT) == Err(RecvTimeoutError::Timeout) {
+                log("Warning: the connection attempt did not finish in time; a spawned backend may have been left running");
+            }
+        }
         let Some(backend) = backend else {
             log("Hermes backend stopped (nothing was connected)");
             return;
