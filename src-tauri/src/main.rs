@@ -4,6 +4,8 @@ mod deeplink;
 mod guard;
 mod hotkey;
 mod native;
+#[cfg(unix)]
+mod payload;
 mod polyfills;
 mod sidecar;
 mod tray;
@@ -40,7 +42,7 @@ fn main() {
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
-            let settings = config::load(handle.path().app_config_dir().ok());
+            let config_dir = handle.path().app_config_dir().ok();
             let log_dir = handle.path().app_log_dir().ok();
             if let Some(dir) = &log_dir {
                 // The sidecar crate appends to a log in here; the dir does not
@@ -54,8 +56,25 @@ fn main() {
             }
 
             app.manage(tray::TrayState::default());
+
+            // A payload build ships its backend as one archive in the resource
+            // dir; a first run unpacks it into the app-data dir, which takes
+            // seconds, so the manager does that on a spawned thread and the
+            // boot page shows the phase. Without a payload both files are
+            // absent and the shell resolves its backend the usual way.
+            #[cfg(unix)]
+            let payload = match (handle.path().resource_dir(), handle.path().app_data_dir()) {
+                (Ok(resource_dir), Ok(data_dir)) => payload::locate(&resource_dir, &data_dir),
+                _ => None,
+            };
+            // The payload's launcher is a POSIX `sh` script, so no Windows
+            // build ships one (docs/python-sidecar.md §5.4).
+            #[cfg(not(unix))]
+            let payload = None;
+
             let manager = sidecar::BootManager::new(
-                settings.resolved,
+                config_dir.clone(),
+                payload,
                 log_dir.map(|dir| dir.join("hermes-sidecar.log")),
             );
             app.manage(manager.clone());
@@ -125,10 +144,11 @@ fn main() {
                 }
             });
 
+            let preferences = config::preferences(config_dir);
             tray::create(&handle);
-            hotkey::register(&handle, settings.hotkey);
+            hotkey::register(&handle, preferences.hotkey);
             deeplink::init(&handle);
-            updater::init(&handle, &settings.updater);
+            updater::init(&handle, &preferences.updater);
 
             let signal_app = handle.clone();
             if let Err(error) = ctrlc::set_handler(move || {
@@ -140,7 +160,7 @@ fn main() {
                 ));
             }
 
-            manager.start(handle);
+            manager.prepare(handle);
             Ok(())
         })
         .build(tauri::generate_context!());

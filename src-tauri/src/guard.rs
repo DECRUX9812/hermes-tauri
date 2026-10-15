@@ -39,8 +39,12 @@ pub fn handle_new_window(
         PopupDecision::Preview => match create_preview_window(app, url, features) {
             Ok(window) => NewWindowResponse::Create { window },
             Err(error) => {
+                // The builder error can quote the URL it failed on, so it goes
+                // through the same redaction as every other logged URL (review
+                // L2).
                 sidecar::log(&format!(
-                    "Denied a popup the shell could not create: {error}"
+                    "Denied a popup the shell could not create: {}",
+                    hermes_sidecar::redact(&error)
                 ));
                 NewWindowResponse::Deny
             }
