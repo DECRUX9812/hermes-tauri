@@ -1,5 +1,5 @@
 use std::io;
-use std::process::Stdio;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::Arc;
@@ -21,6 +21,40 @@ const LINK_POLL: Duration = Duration::from_millis(50);
 const BACKOFF_START: Duration = Duration::from_millis(50);
 const BACKOFF_MAX: Duration = Duration::from_millis(500);
 const EXIT_DRAIN: Duration = Duration::from_millis(500);
+
+/// Environment variables that must never reach a spawned backend.
+///
+/// A bundled AppImage's `AppRun` exports `PYTHONHOME` and `PYTHONPATH` pointing
+/// into its own AppDir (`$APPDIR/usr`), and the shell spawns the payload with
+/// its own environment. An interpreter that inherits them looks for a stdlib in
+/// the AppDir and dies before the first line of Python runs:
+///
+/// ```text
+/// Fatal Python error: Failed to import encodings module
+/// ```
+///
+/// So the spawn removes them. They only ever redirect an interpreter at some
+/// other prefix; they never configure the payload itself.
+const SCRUBBED_ENV: &[&str] = &[
+    "PYTHONHOME",
+    "PYTHONPATH",
+    "PYTHONSTARTUP",
+    "PYTHONEXECUTABLE",
+    "PYTHONUSERBASE",
+    "PYTHONPLATLIBDIR",
+    "PYTHONPYCACHEPREFIX",
+    "PYTHONSAFEPATH",
+];
+
+/// Drops [`SCRUBBED_ENV`] from the child's environment.
+///
+/// `env_remove` wins over both the inherited environment and anything set in
+/// [`SidecarConfig::env`].
+fn scrub_env(command: &mut Command) {
+    for key in SCRUBBED_ENV {
+        command.env_remove(key);
+    }
+}
 
 /// A cooperative stop signal for [`connect_with_cancel`]. The shell sets it
 /// when the user quits while a connection attempt is still running, so the
@@ -111,6 +145,7 @@ fn spawn(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    scrub_env(&mut command);
     process::configure(&mut command);
     let mut child = command.spawn().map_err(spawn_error)?;
     let stdout = child.stdout.take().expect("stdout is piped");
@@ -226,5 +261,35 @@ impl Watch {
             after: self.ready_timeout,
             tail: self.output.tail(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsStr;
+
+    #[test]
+    fn the_appimages_python_env_never_reaches_the_spawned_payload() {
+        let mut command = Command::new("/bin/true");
+        command
+            .env("PYTHONHOME", "/appimage/usr")
+            .env("PYTHONPATH", "/appimage/usr/share/pyshared")
+            .env("HERMES_HOME", "/tmp/hermes-home");
+
+        scrub_env(&mut command);
+
+        for key in SCRUBBED_ENV {
+            let entry = command.get_envs().find(|entry| entry.0 == OsStr::new(key));
+            assert!(
+                matches!(entry, Some((_, None))),
+                "{key} is not removed from the spawned environment"
+            );
+        }
+        let kept = command
+            .get_envs()
+            .find(|entry| entry.0 == OsStr::new("HERMES_HOME"))
+            .and_then(|entry| entry.1);
+        assert_eq!(kept, Some(OsStr::new("/tmp/hermes-home")));
     }
 }

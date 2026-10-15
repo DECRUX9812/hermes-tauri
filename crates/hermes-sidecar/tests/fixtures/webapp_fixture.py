@@ -54,6 +54,7 @@ def main():
     parser.add_argument("--ignore-sigterm", action="store_true")
     parser.add_argument("--spawn-grandchild", action="store_true")
     parser.add_argument("--base-path", default="")
+    parser.add_argument("--print-env", action="store_true")
     args = parser.parse_args()
 
     token = args.token or secrets.token_urlsafe(32)
@@ -62,6 +63,9 @@ def main():
     base_path = "/" + args.base_path.strip("/") if args.base_path.strip("/") else ""
 
     diag(f"pid={os.getpid()}")
+    if args.print_env:
+        for name in ("PYTHONHOME", "PYTHONPATH", "HERMES_HOME"):
+            diag(f"{name}={os.environ.get(name, '<unset>')}")
 
     if args.ignore_sigterm:
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
