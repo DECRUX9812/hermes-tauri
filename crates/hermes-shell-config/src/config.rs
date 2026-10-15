@@ -77,16 +77,59 @@ impl Inputs {
 
 impl fmt::Debug for Inputs {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let args: Vec<String> = self.args.iter().map(|arg| redact(arg)).collect();
         f.debug_struct("Inputs")
-            .field("args", &args)
+            .field("args", &redact_argv(&self.args))
             .field("env_url", &self.env_url.as_deref().map(redact))
-            .field("env_cmd", &self.env_cmd)
+            .field("env_cmd", &self.env_cmd.as_deref().map(command_json_debug))
             .field("env_json", &self.env_json.as_deref().map(env_keys_only))
             .field("config_dir", &self.config_dir)
             .field("path", &self.path.as_ref().map(|p| p.to_string_lossy()))
             .finish()
     }
+}
+
+const REDACTED: &str = "<redacted>";
+
+/// Debug view of an argv: a command line can carry a secret in a
+/// `#hermes-session=` token or behind a flag that names one, so every element
+/// goes through [`redact`] and the value of a secret-naming flag is dropped
+/// entirely (the flag itself stays, so the line is still readable).
+fn redact_argv(argv: &[String]) -> Vec<String> {
+    let mut out = Vec::with_capacity(argv.len());
+    let mut drop_next = false;
+    for arg in argv {
+        if drop_next {
+            drop_next = false;
+            out.push(REDACTED.to_owned());
+            continue;
+        }
+        if let Some((flag, _)) = arg.split_once('=') {
+            if flag.starts_with('-') && names_a_secret(flag) {
+                out.push(format!("{flag}={REDACTED}"));
+                continue;
+            }
+        } else if arg.starts_with('-') && names_a_secret(arg) {
+            drop_next = true;
+        }
+        out.push(redact(arg));
+    }
+    out
+}
+
+/// Debug view of `HERMES_TAURI_CMD`: the parsed argv, redacted. An unparsable
+/// value is not echoed, since it could be anything.
+fn command_json_debug(json: &str) -> String {
+    match serde_json::from_str::<Vec<String>>(json) {
+        Ok(argv) => format!("{:?}", redact_argv(&argv)),
+        Err(_) => "<not a JSON array>".to_owned(),
+    }
+}
+
+fn names_a_secret(flag: &str) -> bool {
+    let flag = flag.to_ascii_lowercase();
+    ["token", "key", "secret", "password"]
+        .iter()
+        .any(|needle| flag.contains(needle))
 }
 
 /// Env values can hold secrets, so Debug shows their keys only.
@@ -317,12 +360,16 @@ pub(crate) fn hotkey_entry(path: &Path) -> Option<String> {
     file.hotkey
 }
 
-/// Looks up a `hermes` executable on PATH: each entry must be a regular file
-/// with an exec bit (Unix).
+/// Looks up a `hermes` executable on PATH: each entry must be absolute and
+/// name a regular file with an exec bit (Unix).
 fn find_on_path(path: Option<&std::ffi::OsStr>) -> Option<PathBuf> {
     let path = path?;
     for dir in std::env::split_paths(path) {
-        if dir.as_os_str().is_empty() {
+        // A relative entry (`.`, `bin`, `..`) is resolved against whatever
+        // directory the shell happens to run in, so it could pick up an
+        // attacker-planted `hermes`; only absolute entries are trusted. This
+        // also covers the empty entry, which is not absolute.
+        if !dir.is_absolute() {
             continue;
         }
         for name in EXECUTABLE_NAMES {
