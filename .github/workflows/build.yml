@@ -52,10 +52,6 @@ jobs:
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             bundles: deb,appimage,rpm
-            # Using tauri-apps/tauri-action@v0 because it handles the tauri-cli installation,
-            # cross-compilation setup, and signing integration in one maintained action.
-            # The alternative (cargo install tauri-cli --version '^2' --locked) would require
-            # manual cache management and separate cross-compilation config per platform.
           - os: ubuntu-22.04-arm
             target: aarch64-unknown-linux-gnu
             bundles: deb,appimage
@@ -95,30 +91,65 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
 
-      - name: Build Tauri app
-        uses: tauri-apps/tauri-action@v0
+      # Prepare signing env: only write non-empty secrets to GITHUB_ENV.
+      # tauri-action reads these at runtime; empty vars would trigger signing attempts and fail.
+      # Use heredoc (<<EOF) for multiline secrets (certificate, private key).
+      - name: Prepare signing environment
+        id: signing
         env:
-          # macOS signing (optional - only used when all secrets are present)
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          # Windows signing (optional - document Azure Trusted Signing or WINDOWS_CERTIFICATE)
+          # Windows: document Azure Trusted Signing or WINDOWS_CERTIFICATE
           # WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
           # WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
-          # Updater signing (optional) - only set when secrets exist to avoid empty vars triggering signing
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD != '' && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          # Single-line secrets: write NAME=value only when set and non-empty
+          for var in \
+            APPLE_CERTIFICATE_PASSWORD \
+            APPLE_SIGNING_IDENTITY \
+            APPLE_ID \
+            APPLE_PASSWORD \
+            APPLE_TEAM_ID \
+            TAURI_SIGNING_PRIVATE_KEY_PASSWORD; do
+            val="${!var}"
+            if [ -n "$val" ]; then
+              echo "$var=$val" >> "$GITHUB_ENV"
+            fi
+          done
+          # Multiline secrets: use heredoc form to preserve newlines
+          for var in APPLE_CERTIFICATE TAURI_SIGNING_PRIVATE_KEY; do
+            val="${!var}"
+            if [ -n "$val" ]; then
+              {
+                echo "$var<<EOF"
+                echo "$val"
+                echo "EOF"
+              } >> "$GITHUB_ENV"
+            fi
+          done
+          # When TAURI_SIGNING_PRIVATE_KEY is present, enable updater artifacts for this build
+          if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+            echo "create_updater_artifacts=--config '{\"bundle\":{\"createUpdaterArtifacts\":true}}'" >> "$GITHUB_OUTPUT"
+          else
+            echo "create_updater_artifacts=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        # Using tauri-apps/tauri-action@v0 because it handles the tauri-cli installation,
+        # cross-compilation setup, and signing integration in one maintained action.
+        # The alternative (cargo install tauri-cli --version '^2' --locked) would require
+        # manual cache management and separate cross-compilation config per platform.
         with:
-          tagName: hermes-tauri-v__VERSION__
-          releaseName: 'Hermes Tauri v__VERSION__'
-          releaseBody: 'See CHANGELOG.md'
-          releaseDraft: true
-          prerelease: false
           tauriScript: cargo tauri
-          args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+          args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} ${{ steps.signing.outputs.create_updater_artifacts }}
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -145,28 +176,10 @@ jobs:
           pattern: bundle-*
           merge-multiple: false
 
-      - name: Prepare release assets
-        id: assets
-        run: |
-          # Find all bundle files
-          find artifacts -type f \( -name "*.deb" -o -name "*.AppImage" -o -name "*.rpm" -o -name "*.dmg" -o -name "*.app.tar.gz" -o -name "*.nsis.exe" -o -name "*.msi" \) | sort
-          # Also find .sig files for updater
-          find artifacts -type f -name "*.sig" | sort
-
       - name: Generate latest.json for updater
         id: latest
         run: |
-          # Tauri v2 updater format - only generate if .sig files exist
-          SIG_FILES=$(find artifacts -type f -name "*.sig" 2>/dev/null | wc -l)
-          if [ "$SIG_FILES" -gt 0 ]; then
-            echo "Generating latest.json from signature files..."
-            # The tauri-action would normally generate this, but we can create it manually if needed
-            # For now, we note that signatures exist
-            echo "signatures_found=true" >> $GITHUB_OUTPUT
-          else
-            echo "No signature files found, skipping latest.json generation"
-            echo "signatures_found=false" >> $GITHUB_OUTPUT
-          fi
+          bash scripts/ci/latest-json.sh
 
       - name: Create Draft GitHub Release
         uses: softprops/action-gh-release@v2
@@ -178,8 +191,9 @@ jobs:
             artifacts/**/*.rpm
             artifacts/**/*.dmg
             artifacts/**/*.app.tar.gz
-            artifacts/**/*.nsis.exe
+            artifacts/**/*_x64-setup.exe
             artifacts/**/*.msi
             artifacts/**/*.sig
+            latest.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

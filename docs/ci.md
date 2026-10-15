@@ -31,13 +31,20 @@ Builds the Tauri application for multiple targets. Uses `tauri-apps/tauri-action
 
 **Fail-fast: false** — one platform failure doesn't cancel others.
 
+**Signing environment**: A dedicated step (`Prepare signing environment`) writes only non-empty secrets to `$GITHUB_ENV`. This avoids passing empty vars (e.g., `TAURI_SIGNING_PRIVATE_KEY=`) which would make `tauri-action` attempt signing and fail. The step uses heredoc (`NAME<<EOF`) form for multiline secrets (`APPLE_CERTIFICATE`, `TAURI_SIGNING_PRIVATE_KEY`) to preserve newlines. When `TAURI_SIGNING_PRIVATE_KEY` is present, the step outputs `create_updater_artifacts=--config '{"bundle":{"createUpdaterArtifacts":true}}'` so the build includes `.sig` files for the updater.
+
 Artifacts uploaded: `target/<target>/release/bundle/**` (one artifact per matrix entry).
 
 #### 3. `release` (needs: build, only on `v*` tags)
 Creates a **draft** GitHub release (never auto-published):
 - Downloads all build artifacts
-- Generates `latest.json` for the Tauri v2 updater **only when `.sig` files exist** (i.e., when signing secrets are configured)
-- Uploads all bundles and signatures as release assets
+- Generates `latest.json` for the Tauri v2 updater via `scripts/ci/latest-json.sh` **only when `.sig` files exist** (i.e., when signing secrets are configured). The script:
+  - Reads artifacts from the `artifacts/` directory
+  - Selects the primary bundle per platform: `.AppImage` for Linux, `.app.tar.gz` for macOS, `*_x64-setup.exe` (NSIS) for Windows
+  - Reads signature contents from `.sig` files
+  - Produces Tauri v2 format: `{"version","notes","pub_date","platforms":{"<os>-<arch>":{"signature":"...","url":"..."}}}`
+  - Skips generation entirely (with a log line) when no `.sig` files are found
+- Uploads all bundles, signatures, and `latest.json` as release assets
 - Uses `contents: write` permission scoped to this job only (top-level is `contents: read`)
 
 ## Secrets
@@ -61,6 +68,45 @@ Creates a **draft** GitHub release (never auto-published):
 For Windows, you can use either:
 - Traditional code signing certificate (`WINDOWS_CERTIFICATE` + `WINDOWS_CERTIFICATE_PASSWORD`)
 - **Azure Trusted Signing** (recommended): Configure via `AZURE_TRUSTED_SIGNING_*` secrets (not in this workflow; add when ready)
+
+## scripts/ci/latest-json.sh
+
+Generates the Tauri v2 updater `latest.json` from downloaded artifacts.
+
+**Inputs** (environment variables):
+- `GITHUB_REPOSITORY` — e.g., `owner/repo`
+- `GITHUB_REF_NAME` — e.g., `v0.1.0` (the tag name)
+- `ARTIFACTS_DIR` — directory containing downloaded artifacts (default: `artifacts`)
+
+**Behavior**:
+1. Finds all `*.sig` files under `ARTIFACTS_DIR`
+2. If none found: logs "No .sig files found ... — skipping latest.json generation" and exits 0
+3. For each platform, selects the highest-priority bundle:
+   - Linux (x86_64, aarch64): `.AppImage` (priority 10) > `.deb`/`.rpm` (priority 5)
+   - macOS (aarch64, x86_64): `.app.tar.gz` (priority 10) > `.dmg` (priority 5)
+   - Windows (x86_64): `*_x64-setup.exe` NSIS installer (priority 10) > `.msi` (priority 5)
+4. Reads signature from the corresponding `.sig` file (whitespace trimmed)
+5. Constructs download URL: `https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/<bundle-filename>`
+6. Emits JSON with `version` (tag without `v`), `notes` (empty), `pub_date` (RFC3339 UTC), and `platforms` map
+6. Outputs `latest.json` in the working directory (uploaded as release asset)
+
+**Testing locally**:
+```bash
+# With fake artifacts (creates test files in .oc/tmp/fake-artifacts/)
+mkdir -p .oc/tmp/fake-artifacts/bundle-x86_64-unknown-linux-gnu
+touch .oc/tmp/fake-artifacts/bundle-x86_64-unknown-linux-gnu/app.AppImage
+echo "testsig" > .oc/tmp/fake-artifacts/bundle-x86_64-unknown-linux-gnu/app.AppImage.sig
+
+GITHUB_REPOSITORY="owner/repo" GITHUB_REF_NAME="v0.1.0" \
+ARTIFACTS_DIR=".oc/tmp/fake-artifacts" bash scripts/ci/latest-json.sh
+# → prints generated JSON
+
+# Empty dir
+mkdir -p .oc/tmp/empty-artifacts
+GITHUB_REPOSITORY="owner/repo" GITHUB_REF_NAME="v0.1.0" \
+ARTIFACTS_DIR=".oc/tmp/empty-artifacts" bash scripts/ci/latest-json.sh
+# → "No .sig files found ... — skipping latest.json generation"
+```
 
 ## Per-Platform Notes
 
