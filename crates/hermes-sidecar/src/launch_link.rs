@@ -37,7 +37,22 @@ pub(crate) fn origin_of(url: &str) -> Option<String> {
     Some(format!("{}://{location}", scheme.to_ascii_lowercase()))
 }
 
-pub(crate) fn redact(text: &str) -> String {
+/// True when `text` is a usable attach URL: a full launch link carrying a
+/// session token, or a bare http/https origin.
+///
+/// Text that looks like a launch link but carries a malformed token is
+/// rejected rather than silently demoted to an origin (which would lose the
+/// session token).
+pub fn is_attach_url(text: &str) -> bool {
+    if text.contains(SESSION_FRAGMENT) {
+        parse_launch_link(text).is_some()
+    } else {
+        origin_of(text).is_some()
+    }
+}
+
+/// Replaces the secret part of any `#hermes-session=` token with `<redacted>`.
+pub fn redact(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(position) = rest.find(SESSION_FRAGMENT) {
@@ -53,4 +68,27 @@ pub(crate) fn redact(text: &str) -> String {
 
 fn is_token_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_'
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_launch_link_and_bare_origin() {
+        let link = format!("http://127.0.0.1:18888/#hermes-session={}", "a".repeat(43));
+        assert!(is_attach_url(&link));
+        assert!(is_attach_url("http://127.0.0.1:9119"));
+        assert!(is_attach_url("https://hermes.example.com"));
+    }
+
+    #[test]
+    fn rejects_malformed_links_and_non_urls() {
+        // A malformed token must not fall back to the origin.
+        let bad_token = "http://127.0.0.1:18888/#hermes-session=short";
+        assert!(!is_attach_url(bad_token));
+        assert!(!is_attach_url("ftp://127.0.0.1:9119"));
+        assert!(!is_attach_url("127.0.0.1:9119"));
+        assert!(!is_attach_url(""));
+    }
 }
