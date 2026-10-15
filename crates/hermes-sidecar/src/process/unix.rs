@@ -7,6 +7,14 @@ pub(crate) fn configure(command: &mut Command) {
     command.process_group(0);
 }
 
+/// The configured argv is spawned as it is: Unix starts the program directly,
+/// without a shell.
+pub(crate) fn command(program: &str, args: &[String]) -> io::Result<Command> {
+    let mut command = Command::new(program);
+    command.args(args);
+    Ok(command)
+}
+
 pub(crate) fn adopt(child: &mut Child) -> io::Result<ProcessGroup> {
     Ok(ProcessGroup {
         pgid: child.id() as libc::pid_t,
