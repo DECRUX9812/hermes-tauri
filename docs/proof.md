@@ -1,7 +1,7 @@
 # Tauri Shell Proof Screenshots (final proof, T6 build)
 
 Screenshots captured under Xvfb (1440x900x24) with a private D-Bus session running the T6 binary
-(`$HOME/.cache/hermes-tauri/target-T6/release/hermes-tauri`, sha256 `f905110a4636e8406b74b51ab13b66dccea0e961e2bed0fece265cc708b0c58f`)
+(`$HOME/.cache/hermes-tauri/target-T6/release/hermes-tauri`, sha256 `7c176900e79d179d1eedc9282b13820a677a106601e46e8ef793511bb4ff68e2`)
 in attach mode against an isolated test Hermes on a port in 18800–18899. The PNGs live in `~/Videos/tauri-shots/` and are not
 committed. One `scripts/proof.sh` run produced all of them, plus two checks that read the shell's log and the window list.
 
@@ -39,22 +39,22 @@ One run of `scripts/proof.sh --bin $HOME/.cache/hermes-tauri/target-T6/release/h
 
 | shot | result | colours | md5 | what it shows |
 |---|---|---|---|---|
-| 01-boot.png | PASS | 13 | ffaf880ddc80962602da94957eb42ee1 | boot page while Hermes is unreachable: launched against the closed port 18802, the page reports it and offers Retry |
-| 01b-splash.png | PASS | 9 | 83ea90fbd436d532443f759f25472658 | the splash (the boot page) still in front of the window while the Hermes app loads, before its first frame |
-| 02-sessions.png | PASS | 21 | ba5847ea844c591b28a43bcfd8305cf4 | home route after attaching: the seeded demo session titles in the sidebar and the seeded recent tasks on the page |
-| 03-plugin-rail.png | PASS | 16 | 620bf4fffaebf57399f314334139b4da | the Kanban plugin page reached by deep link, the plugin rail on the far left |
-| 04-team.png | PASS | 24 | 24fc6d4b63f7b8698e1f59766c66d6d7 | the Demo Product Team page reached by deep link |
-| 05-group-chat.png | PASS | 19 | fc179d11fa054910173a0d05d574f059 | a group chat created through the UI with two demo bots and one submitted neutral message |
-| 06-reload-before.png | PASS | 19 | 1e8da1b55d64cff5d840aeeb6db6a5eb | the group chat view (in-app state on the #/team route) before the reload |
-| 07-reload-after.png | PASS | 29 | 2f29e0b6c759cb4688a2350546a7a849 | the #/team route after F5: the webview reloaded, repainted from the backend and kept the session |
-| 08-deeplink.png | PASS | 216 | 13270770ba1759656567d3d3891a1d64 | the same window after a second invocation handed it the /studio route |
+| 01-boot.png | PASS | 13 | a2f2ac0e07aa491b80d591d0ce81f8de | boot page while Hermes is unreachable: launched against the closed port 18801, the page reports it and offers Retry |
+| 01b-splash.png | PASS | 9 | 419269494a0b5aee7bc3027efc9a38c7 | the splash (the boot page) still in front of the window while the Hermes app loads, before its first frame |
+| 02-sessions.png | PASS | 21 | 7c466aeb263adfd556b3d37c6dea519a | home route after attaching: the seeded demo session titles in the sidebar and the seeded recent tasks on the page |
+| 03-plugin-rail.png | PASS | 19 | 6b9a28fa869a01fa72135d3b09c81674 | the Kanban plugin page reached by deep link, the plugin rail on the far left |
+| 04-team.png | PASS | 24 | 308ca9b780fe8ff397b26e5fbbe3d438 | the Demo Product Team page reached by deep link |
+| 05-group-chat.png | PASS | 18 | 8471c396397dc4fc4890d27cab32a44a | a group chat created through the UI with two demo bots and one submitted neutral message |
+| 06-reload-before.png | PASS | 21 | 8248b74d66d859a5bb7f454e097f0403 | the group chat view (in-app state on the #/team route) before the reload |
+| 07-reload-after.png | PASS | 28 | 935c784e277c12235cc30fcc55dbb019 | the #/team route after F5: the webview reloaded, repainted from the backend and kept the session |
+| 08-deeplink.png | PASS | 214 | f16f1c4833c46a4bec5d26bf7a59442e | the same window after a second invocation handed it the /studio route |
 
 | check | result | what it proves |
 |---|---|---|
 | reload-session | PASS | F5 re-navigated the webview to the same #/team route, the app painted again from the backend, no second window and no connection error: the session survived the reload |
 | splash-cap | PASS | the cap removed the always-on-top splash while the app was still loading (same code path as the 30 s default, shortened to 3000 ms); one window was left and the app painted afterwards |
 
-`--spawn-shutdown` passed in its own run: the shell started its own Hermes (pid 3289628, pgid 3289628) and SIGTERM to the shell
+`--spawn-shutdown` passed in its own run: the shell started its own Hermes (pid 3652917, pgid 3652917) and SIGTERM to the shell
 stopped it within 1 s, with no surviving pid or pgid.
 
 ## Reproducing the proof (T6 build, `scripts/proof.sh`)
@@ -83,8 +83,8 @@ WebDriver or devtools is used. `xvfb-run`, `dbus-run-session`, `scrot`, `xdotool
 
 Output lines:
 
-- `PASS <shot>` the shot was written, its frame was painted (more than 12 distinct colours on a 32x20 sample grid) and its md5 had not
-  appeared earlier in the run.
+- `PASS <shot>` the shot was written, its frame was painted (12 or more distinct colours on a 32x20 sample grid, or 4 for the two
+  boot-page shots 01-boot and 01b-splash, whose pages score lower) and its md5 had not appeared earlier in the run.
 - `PASS <check>` a proof that has no screenshot: it read the shell's own log and the window list.
 - `FAIL <shot|check>: why` the artefact was written and rejected, with the reason; the run continues through the rest of the list.
 - `proof: ...` progress: the ports it picked, the shell pid and log file, and what it is waiting for.
@@ -92,5 +92,7 @@ Output lines:
 The run exits non-zero if any shot or check failed, and it never leaves a stale PNG behind: the output directory is cleared at the
 start and every file it reports is written by that run. Waits are driven by real signals (window mapped, the shell's own stderr log
 lines such as `Navigated to` and `First frame of the Hermes app painted`, a painted frame, the loading state that follows a reload)
-rather than fixed sleeps alone. `01b-splash` also requires two windows with the app title to be mapped at the moment of the shot, so a
-run where the splash was already gone fails the shot instead of passing it with a picture of the app.
+rather than fixed sleeps alone. `01b-splash` samples until the splash's own boot page is on screen, and re-checks after every capture
+that two windows with the app title are still mapped and that the app has not reported its first frame: the app's first frame dismisses
+the splash, so either signal means the moment has passed and the shot fails instead of passing with a picture of the app or of a white
+window that has not painted yet.

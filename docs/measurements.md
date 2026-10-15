@@ -12,17 +12,17 @@ hotkey, deep links or the splash.
 
 | Metric | Electron (v0.17.0 build) | Tauri (T1 build, attach mode; tray/hotkey/updater not yet included) | Tauri (T6 build, attach mode, full T5 shell + splash) | Ratio (Tauri T6 / Electron) |
 |---|---|---|---|---|
-| Size, `linux-unpacked` / raw binary (apparent) | 335.5 MB (351,822,445 bytes, 434 files) | 19.4 MB (20,358,904 bytes, 1 file) | 23.4 MiB (24,502,648 bytes, 1 file) | 0.070x (-93.0%) |
-| Size, `linux-unpacked` / raw binary (on disk) | 336.5 MB | 19.4 MB (20,361,216 bytes) | 23.4 MiB (24,510,464 bytes) | 0.070x (-93.0%) |
-| Size, AppImage | 142 MB, from an earlier build, not re-measured | 85.72 MiB (89,881,080 bytes) * | 87.19 MiB (91,429,368 bytes) | 0.614x (-38.6%) |
-| Size, deb | 114 MB, from an earlier build, not re-measured | 6.84 MiB (7,173,418 bytes) * | 8.32 MiB (8,727,998 bytes) | 0.073x (-92.7%) |
+| Size, `linux-unpacked` / raw binary (apparent) | 335.5 MB (351,822,445 bytes, 434 files) | 19.4 MB (20,358,904 bytes, 1 file) | 23.85 MiB (25,008,328 bytes, 1 file) | 0.071x (-92.9%) |
+| Size, `linux-unpacked` / raw binary (on disk) | 336.5 MB | 19.4 MB (20,361,216 bytes) | 23.86 MiB (25,014,272 bytes) | 0.071x (-92.9%) |
+| Size, AppImage | 142 MB, from an earlier build, not re-measured | 85.72 MiB (89,881,080 bytes) * | 87.39 MiB (91,634,168 bytes) | 0.615x (-38.5%) |
+| Size, deb | 114 MB, from an earlier build, not re-measured | 6.84 MiB (7,173,418 bytes) * | 8.54 MiB (8,958,852 bytes) | 0.075x (-92.5%) |
 | Idle RAM, shell PSS median (run 1 / run 2 / run 3) | 414.3 MiB / 436.8 MiB | 390.2 MiB (runs: 390.2 / 390.7 / 388.6) | 403.0 MiB (runs: 405.8 / 400.2) † | 0.973x (-2.7%) |
 | Idle RAM, shell RSS median (run 1 / run 2 / run 3) | 876.2 MiB / 878.3 MiB | 571.5 MiB (runs: 571.5 / 571.8 / 570.0) | 711.5 MiB (runs: 713.7 / 709.2) † | 0.812x (-18.8%) |
 | Idle RAM, processes in shell tree | 7 | 3 (`hermes-tauri`, `WebKitWebProcess`, `WebKitNetworkProcess`) | 17 (3 shell processes plus the session bus and portal helpers `dbus-run-session` activates) † | 0.43x for the shell itself |
 | RAM after sidebar click, PSS median | 395.5 MiB (RSS 836.3 MiB; Messaging page) | 391.8 MiB (RSS 573.1 MiB; runs: 391.8 / 392.9 / 388.1; `#/team`) | 415.3 MiB (RSS 702.6 MiB; `#/team`) † | 1.050x PSS / 0.840x RSS |
 | Window startup, median of 3 cold runs | 2434.1 ms (runs: 2211.8, 2514.3, 2434.1) | 6725.4 ms (runs: 10262.2, 6725.4, 6481.1) | 2024.7 ms (runs: 2024.7, 2839.1, 1834.8) — the splash | 0.832x |
 | Window startup to the remote UI painted, median of 3 | 2434.1 ms (same event for Electron: no local splash) | not measured (no splash existed) | 6443.0 ms (runs: 7328.3, 6234.3, 6443.0) | 2.65x |
-| **Ratio (Tauri T6 / Electron)** | **1.0x baseline** | — | **Binary 0.070x, Deb 0.073x, AppImage 0.614x, Idle RSS 0.812x, Idle PSS 0.973x, Startup-to-splash 0.832x, Startup-to-remote-UI 2.65x** | **—** |
+| **Ratio (Tauri T6 / Electron)** | **1.0x baseline** | — | **Binary 0.071x, Deb 0.075x, AppImage 0.615x, Idle RSS 0.812x, Idle PSS 0.973x, Startup-to-splash 0.832x, Startup-to-remote-UI 2.65x** | **—** |
 
 \* Bundle files under `$HOME/.cache/hermes-tauri/target/release/bundle/` had mtimes from 01:33–01:34 UTC (concurrent T5 build), so frozen T1 bundle sizes from `.oc/brief/T1-report.md` are reported. Raw binary measured directly from `$HOME/.cache/hermes-tauri/bin-t1/hermes-tauri`.
 
@@ -35,9 +35,13 @@ figure) and 399.0 MiB after the click, so the shell itself did not grow; the who
 what the harness prints for this method.
 
 The T6 binary is `$HOME/.cache/hermes-tauri/target-T6/release/hermes-tauri`, sha256
-`2893f25ba0f222011d5c0e4a6388451b086a3f342e8b9df88fab10bc4ba7e300`, built from branch `t6-proof`. Both
-bundles come from the same `cargo tauri build --bundles deb,appimage` step; the AppImage was also launched
-once with `APPIMAGE_EXTRACT_AND_RUN=1` and reached the app's first painted frame.
+`7c176900e79d179d1eedc9282b13820a677a106601e46e8ef793511bb4ff68e2`, built from branch `t6-proof` after master
+(T16 bundled payload, T17 Windows compile) was merged in. Both bundles come from the same
+`cargo tauri build --bundles deb,appimage` step; the AppImage was also launched once with
+`APPIMAGE_EXTRACT_AND_RUN=1` and reached the app's first painted frame. The RAM and startup figures above
+were measured on the pre-merge T6 binary (sha256 `2893f25b...`, 24,502,648 bytes); the merge adds about 2%
+to the binary size and touches the payload-install path, which does not run in attach mode, so those figures
+are kept and the sizes are the ones from this build.
 
 Backend (Python) processes excluded from every RAM figure: 0 in every run (attach mode, see below).
 Electron's two `linux-unpacked` trees (`hermes-agent-integrated` and `hermes-final-merge2`) both measure
@@ -334,7 +338,9 @@ scripts/measure.sh startup --label tauri-t6-remoteui --env-file <env> --runs 3 \
 - Two T6 RAM runs, not three: the lock is shared and each RAM run holds it for the full settle and sample
   window. The two idle figures differ by 3% (409.3 vs 396.7 MiB), so the median is quoted with both runs.
 - The T6 bundle sizes are from this task's own `cargo tauri build --bundles deb,appimage` in
-  `$HOME/.cache/hermes-tauri/target-T6`, not from the shared `target/`.
+  `$HOME/.cache/hermes-tauri/target-T6`, not from the shared `target/`. They were re-measured after the
+  T16/T17 merge (the binary grew 24,502,648 -> 25,008,328 bytes, +2.1%), which is under the 5% threshold
+  for re-running the RAM and startup sets, so only the sizes were refreshed.
 - Electron's AppImage (142 MB) and deb (114 MB) figures are still from an earlier build and were not
   re-measured; the deb ratio in particular is approximate.
 - `scripts/measure-helper.py` was extended in this task with `--stop-log` and with 24-bit-per-pixel XWD

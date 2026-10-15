@@ -189,7 +189,7 @@ Unlike native system packages, the Tauri AppImage **bundles WebKitGTK and its ru
 - `usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/WebKitWebProcess`
 - `usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/injected-bundle/libwebkit2gtkinjectedbundle.so`
 
-Because WebKitGTK, JavaScriptCore, and their runtime helper processes are bundled, the AppDir's `usr/lib` directory is ~252 MB, producing an AppImage bundle of ~85.7 MiB (in contrast to the native `.deb` package, which is only ~6.84 MiB). The T6 build measures 87.2 MiB AppImage and 8.33 MiB deb from the same AppDir layout.
+Because WebKitGTK, JavaScriptCore, and their runtime helper processes are bundled, the AppDir's `usr/lib` directory is ~252 MB, producing an AppImage bundle of ~85.7 MiB (in contrast to the native `.deb` package, which is only ~6.84 MiB). The T6 build measures 87.39 MiB AppImage and 8.54 MiB deb from the same AppDir layout.
 
 #### Glibc Baseline & Oldest Supported Distro
 The official Tauri AppImage documentation states:

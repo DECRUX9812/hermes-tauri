@@ -265,24 +265,46 @@ place_window() {
 # loads. Taken after the launch navigation and before the app's first frame,
 # and only while the splash window is still mapped, so a PASS here means the
 # user really saw the boot page and not a blank window.
+#
+# The splash is a second webview, so its own boot page needs a moment to paint
+# its first frame; under load that moment is seconds, and a shot taken before it
+# is a picture of a white window. Sample until the boot page is really on
+# screen, and re-check after each capture that the splash is still the window in
+# front and the app has not painted: the app's first frame dismisses the splash,
+# so either signal means this shot's moment has passed.
 splash_shot() {
-  local windows
+  local windows deadline
   if ! wait_log 'Main window navigation' 45 >/dev/null; then
     record 01b-splash FAIL "-" "-" "the launch navigation was never logged"
     return 1
   fi
-  if grep -q 'First frame of the Hermes app painted' "$SHELL_LOG"; then
-    record 01b-splash FAIL "-" "-" "the app painted before the splash could be captured"
-    return 1
-  fi
-  windows="$(window_count)"
-  if ((windows != 2)); then
-    record 01b-splash FAIL "-" "-" \
-      "$windows window(s) carry the app title, so the splash was already gone"
-    return 1
-  fi
-  shot 01b-splash 4 \
-    "the splash (the boot page) still in front of the window while the Hermes app loads, before its first frame"
+  deadline=$((SECONDS + 45))
+  while :; do
+    if grep -q 'First frame of the Hermes app painted' "$SHELL_LOG"; then
+      record 01b-splash FAIL "-" "-" "the app painted before the splash could be captured"
+      return 1
+    fi
+    windows="$(window_count)"
+    if ((windows != 2)); then
+      record 01b-splash FAIL "-" "-" \
+        "$windows window(s) carry the app title, so the splash was already gone"
+      return 1
+    fi
+    if capture 01b-splash; then
+      if ((CAP_COLOURS >= 4)) && ! capture_repeats &&
+        ! grep -q 'First frame of the Hermes app painted' "$SHELL_LOG"; then
+        record 01b-splash PASS "$CAP_COLOURS" "$CAP_MD5" \
+          "the splash (the boot page) still in front of the window while the Hermes app loads, before its first frame"
+        return 0
+      fi
+    fi
+    if ((SECONDS >= deadline)); then
+      record 01b-splash FAIL "${CAP_COLOURS:--}" "${CAP_MD5:--}" \
+        "blank frame: ${CAP_COLOURS:-unreadable} distinct colours on the sample grid, under 4"
+      return 1
+    fi
+    sleep 0.5
+  done
 }
 
 # Fast probe of what is on screen (xwd, ~0.2 s), used only to decide when to
@@ -442,6 +464,21 @@ capture() {
   return 0
 }
 
+# True when the frame just captured is byte-identical to an earlier shot: the
+# screen never changed, so the shot would prove nothing. Sets CAP_REPEAT to the
+# name of the shot it repeats.
+capture_repeats() {
+  local index
+  CAP_REPEAT=""
+  for index in "${!SHOT_MD5[@]}"; do
+    if [[ "${SHOT_MD5[$index]}" == "$CAP_MD5" ]]; then
+      CAP_REPEAT="${SHOT_ORDER[$index]}"
+      return 0
+    fi
+  done
+  return 1
+}
+
 # Captures one shot, checks the frame is painted and not a copy of an earlier
 # shot, and prints its PASS or FAIL line. `timeout` is how long the frame is
 # given to reach `min` colours: a route that paints a loading state first (the
@@ -450,7 +487,7 @@ capture() {
 # last frame is kept when the timeout runs out, so the FAIL still shows what was
 # on screen.
 shot() {
-  local name="$1" min="$2" desc="$3" timeout="${4:-0}" index earlier
+  local name="$1" min="$2" desc="$3" timeout="${4:-0}"
   local deadline=$((SECONDS + timeout))
   while :; do
     if ! capture "$name"; then
@@ -467,14 +504,11 @@ shot() {
       "blank frame: $CAP_COLOURS distinct colours on the sample grid, under $min"
     return 1
   fi
-  for index in "${!SHOT_MD5[@]}"; do
-    earlier="${SHOT_MD5[$index]}"
-    if [[ "$earlier" == "$CAP_MD5" ]]; then
-      record "$name" FAIL "$CAP_COLOURS" "$CAP_MD5" \
-        "identical to ${SHOT_ORDER[$index]}.png: the screen never changed"
-      return 1
-    fi
-  done
+  if capture_repeats; then
+    record "$name" FAIL "$CAP_COLOURS" "$CAP_MD5" \
+      "identical to $CAP_REPEAT.png: the screen never changed"
+    return 1
+  fi
   record "$name" PASS "$CAP_COLOURS" "$CAP_MD5" "$desc"
 }
 
