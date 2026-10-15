@@ -131,6 +131,11 @@ write_test_config() {
   cat > "$STATE_DIR/hermes/config.yaml" <<'YAML'
 onboarding:
   run: false
+model:
+  provider: custom
+  base_url: http://127.0.0.1:18899/v1
+  default: test-model
+  api_key: no-key-required
 YAML
   chmod 600 "$STATE_DIR/hermes/config.yaml"
 }
