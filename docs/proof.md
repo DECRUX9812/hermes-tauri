@@ -1,7 +1,7 @@
 # Tauri Shell Proof Screenshots (final proof, T6 build)
 
 Screenshots captured under Xvfb (1440x900x24) with a private D-Bus session running the T6 binary
-(`$HOME/.cache/hermes-tauri/target-T6/release/hermes-tauri`, sha256 `7c176900e79d179d1eedc9282b13820a677a106601e46e8ef793511bb4ff68e2`)
+(`$HOME/.cache/hermes-tauri/target-T6/release/hermes-tauri`, sha256 `0c2ac2007b36bf0d9aeea3efc2699f4d5a6e97a73a22e4605601910b1bb92545`)
 in attach mode against an isolated test Hermes on a port in 18800–18899. The PNGs live in `~/Videos/tauri-shots/` and are not
 committed. One `scripts/proof.sh` run produced all of them, plus two checks that read the shell's log and the window list.
 
@@ -39,22 +39,22 @@ One run of `scripts/proof.sh --bin $HOME/.cache/hermes-tauri/target-T6/release/h
 
 | shot | result | colours | md5 | what it shows |
 |---|---|---|---|---|
-| 01-boot.png | PASS | 13 | a2f2ac0e07aa491b80d591d0ce81f8de | boot page while Hermes is unreachable: launched against the closed port 18801, the page reports it and offers Retry |
+| 01-boot.png | PASS | 13 | ffaf880ddc80962602da94957eb42ee1 | boot page while Hermes is unreachable: launched against the closed port 18802, the page reports it and offers Retry |
 | 01b-splash.png | PASS | 9 | 419269494a0b5aee7bc3027efc9a38c7 | the splash (the boot page) still in front of the window while the Hermes app loads, before its first frame |
-| 02-sessions.png | PASS | 21 | 7c466aeb263adfd556b3d37c6dea519a | home route after attaching: the seeded demo session titles in the sidebar and the seeded recent tasks on the page |
-| 03-plugin-rail.png | PASS | 19 | 6b9a28fa869a01fa72135d3b09c81674 | the Kanban plugin page reached by deep link, the plugin rail on the far left |
-| 04-team.png | PASS | 24 | 308ca9b780fe8ff397b26e5fbbe3d438 | the Demo Product Team page reached by deep link |
-| 05-group-chat.png | PASS | 18 | 8471c396397dc4fc4890d27cab32a44a | a group chat created through the UI with two demo bots and one submitted neutral message |
-| 06-reload-before.png | PASS | 21 | 8248b74d66d859a5bb7f454e097f0403 | the group chat view (in-app state on the #/team route) before the reload |
-| 07-reload-after.png | PASS | 28 | 935c784e277c12235cc30fcc55dbb019 | the #/team route after F5: the webview reloaded, repainted from the backend and kept the session |
-| 08-deeplink.png | PASS | 214 | f16f1c4833c46a4bec5d26bf7a59442e | the same window after a second invocation handed it the /studio route |
+| 02-sessions.png | PASS | 21 | 56122dacb9c5c19cec0ae57ae0375187 | home route after attaching: the seeded demo session titles in the sidebar and the seeded recent tasks on the page |
+| 03-plugin-rail.png | PASS | 16 | 0d64376e30c78b8665cc61261f9a8078 | the Kanban plugin page reached by deep link, the plugin rail on the far left |
+| 04-team.png | PASS | 26 | 5f71d55c0e8594b2c7b8d29d11fb6966 | the Demo Product Team page reached by deep link |
+| 05-group-chat.png | PASS | 18 | 83e72bcce08752b95ee2b8ea0bb7539c | a group chat created through the UI with two demo bots and one submitted neutral message |
+| 06-reload-before.png | PASS | 19 | 0db609271b199963fcc1355ba2f5a094 | the group chat view (in-app state on the #/team route) before the reload |
+| 07-reload-after.png | PASS | 29 | ce7683a7ce77a39238581b406208e4f6 | the #/team route after F5: the webview reloaded, repainted from the backend and kept the session |
+| 08-deeplink.png | PASS | 200 | d47a85f81f88d61a54b5b0eb1c9b56c6 | the same window after a second invocation handed it the /studio route |
 
 | check | result | what it proves |
 |---|---|---|
 | reload-session | PASS | F5 re-navigated the webview to the same #/team route, the app painted again from the backend, no second window and no connection error: the session survived the reload |
 | splash-cap | PASS | the cap removed the always-on-top splash while the app was still loading (same code path as the 30 s default, shortened to 3000 ms); one window was left and the app painted afterwards |
 
-`--spawn-shutdown` passed in its own run: the shell started its own Hermes (pid 3652917, pgid 3652917) and SIGTERM to the shell
+`--spawn-shutdown` passed in its own run: the shell started its own Hermes (pid 3806995, pgid 3806995) and SIGTERM to the shell
 stopped it within 1 s, with no surviving pid or pgid.
 
 ## Reproducing the proof (T6 build, `scripts/proof.sh`)
