@@ -215,6 +215,16 @@ jobs:
             echo "updater_config=" >> "$GITHUB_OUTPUT"
           fi
 
+      # tauriScript is `cargo tauri`, so the cargo subcommand must exist.
+      # rust-cache keeps ~/.cargo/bin, so later runs skip the compile.
+      - name: Install tauri-cli
+        shell: bash
+        run: |
+          if ! cargo tauri --version >/dev/null 2>&1; then
+            cargo install tauri-cli --version "^2" --locked
+          fi
+          cargo tauri --version
+
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         # Using tauri-apps/tauri-action@v0 because it handles the tauri-cli installation,
