@@ -5,14 +5,14 @@ permissions:
 
 on:
   push:
-    branches: [master]
+    branches: [main]
     tags:
       - 'v*'
   pull_request:
   workflow_dispatch:
 
 # One run per ref: supersede an in-flight run only for pull requests, so a
-# master push or a tagged release build is never cancelled mid-flight.
+# main push or a tagged release build is never cancelled mid-flight.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -85,6 +85,23 @@ jobs:
           cargo clippy --locked --target x86_64-pc-windows-msvc --all-targets \
             -p hermes-sidecar -p hermes-shell-config -- -D warnings
 
+  # The Rust tests on the two non-Linux runners (Linux runs them in `check`).
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-14]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+      - name: Run tests
+        run: cargo test --workspace --locked
+
   build:
     name: Build ${{ matrix.os }} / ${{ matrix.target }}
     needs: check
@@ -96,18 +113,23 @@ jobs:
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             bundles: deb,appimage,rpm
+            smoke: true
           - os: ubuntu-22.04-arm
             target: aarch64-unknown-linux-gnu
             bundles: deb,appimage
+            smoke: true
           - os: macos-14
             target: aarch64-apple-darwin
             bundles: app,dmg
+            smoke: true
           - os: macos-14
             target: x86_64-apple-darwin
             bundles: app,dmg
+            smoke: false
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             bundles: nsis,msi
+            smoke: true
 
     steps:
       - uses: actions/checkout@v4
@@ -203,6 +225,56 @@ jobs:
           tauriScript: cargo tauri
           args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} ${{ steps.signing.outputs.updater_config }} -- --locked
 
+      # Headless smoke test: launch the release binary with no backend
+      # configured and no `hermes` on PATH. The shell must come up, show its
+      # boot page ("No Hermes configured") and still be running 25 s later.
+      # Skipped for x86_64-apple-darwin, which is cross-built on an ARM runner.
+      - name: Smoke test (Linux, Xvfb)
+        if: runner.os == 'Linux' && matrix.smoke
+        shell: bash
+        run: |
+          sudo apt-get install -y --no-install-recommends xvfb xauth dbus-x11
+          BIN="target/${{ matrix.target }}/release/hermes-tauri"
+          test -x "$BIN"
+          mkdir -p "$RUNNER_TEMP/smoke-home"
+          set +e
+          HOME="$RUNNER_TEMP/smoke-home" timeout 25 dbus-run-session -- \
+            xvfb-run -a -s "-screen 0 1280x800x24" "$BIN" > smoke.log 2>&1
+          rc=$?
+          set -e
+          cat smoke.log
+          # 124: still running when the timeout fired, so the shell started and stayed up.
+          if [ "$rc" != 124 ]; then echo "::error::hermes-tauri exited early (rc=$rc)"; exit 1; fi
+          echo "smoke ok: hermes-tauri stayed up for 25 s"
+
+      - name: Smoke test (macOS)
+        if: runner.os == 'macOS' && matrix.smoke
+        shell: bash
+        run: |
+          BIN="target/${{ matrix.target }}/release/hermes-tauri"
+          test -x "$BIN"
+          "$BIN" > smoke.log 2>&1 &
+          pid=$!
+          sleep 25
+          if ! kill -0 "$pid" 2>/dev/null; then
+            cat smoke.log; wait "$pid"; echo "::error::hermes-tauri exited early (rc=$?)"; exit 1
+          fi
+          kill "$pid" || true
+          cat smoke.log
+          echo "smoke ok: hermes-tauri stayed up for 25 s"
+
+      - name: Smoke test (Windows)
+        if: runner.os == 'Windows' && matrix.smoke
+        shell: pwsh
+        run: |
+          $exe = "target\${{ matrix.target }}\release\hermes-tauri.exe"
+          if (-not (Test-Path $exe)) { Write-Error "missing $exe"; exit 1 }
+          $p = Start-Process -FilePath $exe -PassThru
+          Start-Sleep -Seconds 25
+          if ($p.HasExited) { Write-Error "hermes-tauri exited early (code $($p.ExitCode))"; exit 1 }
+          Stop-Process -Id $p.Id -Force
+          Write-Output "smoke ok: hermes-tauri stayed up for 25 s"
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -226,7 +298,7 @@ jobs:
 
   release:
     name: Create Draft Release
-    needs: build
+    needs: [build, test]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-22.04
     permissions:

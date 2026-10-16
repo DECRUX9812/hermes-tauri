@@ -36,9 +36,10 @@ by `scripts/proof.sh`; the raw PNGs are reproducible and are not committed outsi
 
 ## Install
 
-**From a release.** Download the `deb` or `AppImage` for your platform from the
-[releases page](https://github.com/DECRUX9812/hermes-tauri/releases) (Linux x86_64 and aarch64 are the
-only targets built today; see [Platform status](#platform-status)). Install the `deb` with
+**From a release.** Download the bundle for your platform from the
+[releases page](https://github.com/DECRUX9812/hermes-tauri/releases): `deb`/`AppImage`/`rpm` on Linux,
+`dmg` on macOS, the NSIS `-setup.exe` or `msi` on Windows (see [Platform status](#platform-status);
+the macOS and Windows builds are unsigned, so Gatekeeper and SmartScreen will warn). Install the `deb` with
 `sudo apt install ./Hermes\ Tauri_*.deb`, or make the AppImage executable and run it
 (`chmod +x` then `./Hermes-Tauri_*.AppImage`). The deb links the distro's WebKitGTK; the AppImage
 bundles the build machine's. Neither updates the `.deb`/`.rpm` in place — only the AppImage self-updates.
@@ -105,17 +106,19 @@ per-user app-data directory via `HERMES_HOME`, so app updates replace only the i
 
 ## Platform status
 
-Verified on the dev workstation means a release binary and bundles were built and run there. The CI
-matrix is written for every target but has never been executed. Full details, and what is left per
-platform, are in [docs/platforms.md](docs/platforms.md).
+Linux x86_64 is the platform this shell was developed and proven on by hand. Windows and macOS are
+**CI-built**: GitHub Actions builds the app and its bundles, runs the Rust tests and a headless
+launch smoke test on every push, but nobody has used those builds interactively yet. Full details,
+and what is left per platform, are in [docs/platforms.md](docs/platforms.md) and
+[docs/ci.md](docs/ci.md).
 
 | Platform | Target triple | CI bundles | Status |
 |---|---|---|---|
-| Linux x86_64 | `x86_64-unknown-linux-gnu` | deb, appimage, rpm | Verified on the dev workstation (build, attach, spawn, native overlays, rendering) |
-| Linux aarch64 | `aarch64-unknown-linux-gnu` | deb, appimage | Written but not run |
-| macOS ARM64 | `aarch64-apple-darwin` | app, dmg | Written but not run |
-| macOS x64 | `x86_64-apple-darwin` | app, dmg | Written but not run |
-| Windows x64 | `x86_64-pc-windows-msvc` | nsis, msi | Written but not run |
+| Linux x86_64 | `x86_64-unknown-linux-gnu` | deb, appimage, rpm | Verified by hand on a dev workstation (build, attach, spawn, native overlays, rendering, Xvfb proof); CI-built and smoke-tested |
+| Linux aarch64 | `aarch64-unknown-linux-gnu` | deb, appimage | CI-built and smoke-tested |
+| macOS ARM64 | `aarch64-apple-darwin` | app, dmg | CI-built, tested and smoke-tested; unsigned |
+| macOS x64 | `x86_64-apple-darwin` | app, dmg | CI-built (cross-compiled on ARM, not launched); unsigned |
+| Windows x64 | `x86_64-pc-windows-msvc` | nsis, msi | CI-built, tested and smoke-tested; unsigned |
 
 ## Plugin settings
 

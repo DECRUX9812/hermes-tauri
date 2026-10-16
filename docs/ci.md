@@ -9,9 +9,9 @@ This document describes the GitHub Actions workflow for building the Hermes Taur
 ### Top-Level Configuration
 - **Workflow Name**: `Build`
 - **Permissions**: `contents: read` (scoped globally, elevated to `contents: write` only within the release job)
-- **Concurrency**: one run per ref (`${{ github.workflow }}-${{ github.ref }}`), superseding an in-flight run (`cancel-in-progress`) **only** for `pull_request` events, so a `push` to `master` or a tagged release build is never cancelled mid-flight
+- **Concurrency**: one run per ref (`${{ github.workflow }}-${{ github.ref }}`), superseding an in-flight run (`cancel-in-progress`) **only** for `pull_request` events, so a `push` to `main` or a tagged release build is never cancelled mid-flight
 - **Triggers**:
-  - `push` to `master`
+  - `push` to `main`
   - Tag creation matching `v*`
   - `pull_request` against all branches
   - `workflow_dispatch` (manual trigger)
@@ -47,6 +47,11 @@ Runs code quality and verification checks on every push, PR, and tag:
   The step points `CC_x86_64_pc_windows_msvc` and `AR_x86_64_pc_windows_msvc` at a no-op tool it creates itself. `cargo check` emits metadata and never links, so the C and assembly parts of the two C dependencies (`ring`, through `ureq`'s TLS, and `zstd-sys`, through `hermes-shell-config`) are not needed on a runner without an MSVC toolchain, and no C artifact reaches a link step. The Rust-level checking of `cfg(windows)` code is unaffected; the `build` job still compiles the real thing with MSVC.
 
 Clippy, the tests, and the release build pass `--locked`, so CI builds from the committed `Cargo.lock` and fails instead of re-resolving it.
+
+---
+
+#### 1b. `test` (`windows-latest`, `macos-14`)
+Runs `cargo test --workspace --locked` on Windows and macOS (Linux runs the same tests in `check`).
 
 ---
 
@@ -189,7 +194,7 @@ ARTIFACTS_DIR=".oc/tmp/empty-artifacts" bash scripts/ci/stage-release.sh
 
 ## Release Process
 
-1. Merge approved changes into `master`.
+1. Merge approved changes into `main`.
 2. Create and push a semver tag:
    ```bash
    git tag v0.1.0
@@ -198,3 +203,11 @@ ARTIFACTS_DIR=".oc/tmp/empty-artifacts" bash scripts/ci/stage-release.sh
 3. The `check` and `build` jobs compile all target binaries and upload artifacts.
 4. The `release` job stages files, generates `latest.json` (if signing is enabled), and creates a draft release on GitHub.
 5. Inspect the draft release on GitHub, verify the deliverables, and click **Publish Release**.
+
+### Smoke test
+
+After each native build (Linux x86_64 and aarch64 under Xvfb with a private D-Bus session, macOS
+ARM64, Windows x64) the job launches the release binary with no backend configured and no `hermes`
+on `PATH`. The shell must start, show its boot page ("No Hermes configured") and still be running
+25 s later. `x86_64-apple-darwin` is cross-built on an ARM runner and is not launched.
+
