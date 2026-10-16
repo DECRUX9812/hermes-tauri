@@ -1,0 +1,47 @@
+name: demo-settings
+version: 1.0.0
+description: Neutral fixture plugin whose config_schema covers every Desktop settings field type.
+config_schema:
+  api_url:
+    type: str
+    label: API URL
+    description: Neutral endpoint the demo client talks to.
+    default: https://api.example.com/v1
+    required: true
+  mode:
+    type: str
+    label: Mode
+    description: Which demo mode the fixture runs in.
+    choices: [fast, careful]
+    default: fast
+  retries:
+    type: int
+    label: Retries
+    description: How many times a demo request is retried.
+    default: 3
+  timeout_seconds:
+    type: float
+    label: Timeout seconds
+    description: Per-request timeout for the demo client.
+    default: 2.5
+  verbose:
+    type: bool
+    label: Verbose logging
+    description: Log extra detail for each demo run.
+    default: false
+  tags:
+    type: list
+    label: Tags
+    description: Demo labels attached to every request.
+    default: [demo]
+  limits:
+    type: dict
+    label: Limits
+    description: Neutral numeric limits for the demo client.
+    default:
+      rps: 5
+  api_key:
+    type: secret
+    env: DEMO_SETTINGS_API_KEY
+    label: API key
+    description: Demo credential; it is stored in the environment file, never in config.yaml.

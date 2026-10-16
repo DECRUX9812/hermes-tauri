@@ -6,6 +6,10 @@ REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 PIN="${HERMES_TAURI_PIN:-$REPO_ROOT/../_hermes-pin}"
 DEFAULT_STATE_DIR=/tmp/hermes-tauri-test
 STATE_DIR="${HERMES_TAURI_TEST_DIR:-$DEFAULT_STATE_DIR}"
+# Opt-in: install and enable the neutral demo-settings fixture plugin in the test home. Off by
+# default, so every existing caller keeps the same behaviour.
+DEMO_SETTINGS_PLUGIN="${HERMES_TAURI_DEMO_SETTINGS_PLUGIN:-0}"
+DEMO_SETTINGS_SRC="$SCRIPT_DIR/fixtures/demo-settings-plugin"
 
 fail() {
   printf 'test-hermes: %s\n' "$*" >&2
@@ -138,7 +142,32 @@ model:
   default: test-model
   api_key: no-key-required
 YAML
+  if demo_settings_plugin_enabled; then
+    cat >> "$STATE_DIR/hermes/config.yaml" <<'YAML'
+plugins:
+  enabled:
+    - demo-settings
+YAML
+  fi
   chmod 600 "$STATE_DIR/hermes/config.yaml"
+}
+
+demo_settings_plugin_enabled() {
+  [[ "$DEMO_SETTINGS_PLUGIN" == 1 ]]
+}
+
+# Copies the fixture into the isolated home and enables it through the ordinary opt-in
+# allow-list, so the running test Hermes discovers it exactly like a user install would.
+install_demo_settings_plugin() {
+  demo_settings_plugin_enabled || return 0
+  [[ -f "$DEMO_SETTINGS_SRC/plugin.yaml" ]] || fail "demo-settings fixture is missing at $DEMO_SETTINGS_SRC"
+  mkdir -p "$STATE_DIR/hermes/plugins/demo-settings"
+  cp -f -- "$DEMO_SETTINGS_SRC/plugin.yaml" "$DEMO_SETTINGS_SRC/__init__.py" \
+    "$STATE_DIR/hermes/plugins/demo-settings/"
+  chmod 600 "$STATE_DIR/hermes/plugins/demo-settings/plugin.yaml" \
+    "$STATE_DIR/hermes/plugins/demo-settings/__init__.py"
+  printf 'test-hermes: installed the demo-settings fixture under %s\n' \
+    "$STATE_DIR/hermes/plugins/demo-settings" >&2
 }
 
 port_is_free() {
@@ -266,6 +295,7 @@ start_server() {
   port_is_free "$port" || fail "test port $port is already in use"
 
   write_test_config
+  install_demo_settings_plugin
   run_seed >/dev/null
   run_id="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
   make_server_command "$port" "$run_id"
@@ -493,6 +523,7 @@ seed_demo() {
   server_env "$python"
   ensure_state
   write_test_config
+  install_demo_settings_plugin
   run_seed
 }
 
