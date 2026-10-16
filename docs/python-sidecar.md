@@ -328,6 +328,11 @@ Measured on the real 341 MB payload (T16b, inside `hermes-tauri-builder:26.04`):
 | second call (`.ready`) | < 1 ms |
 | boot to `/healthz` = 200 | 14.4 s (T15 measured 16.1 s, T10 16-20 s) |
 
+T16's final archive, packed from the refreshed payload (see §5.9), is bigger because it is a newer
+`hermes_plus`, and it is the clean one T21 packs without `--allow-build-paths`: 90,932,314 B (86.7 MiB),
+sha256 `2b4ca0ae…`, version `2026-10-15T23-00-58Z`, 14,117 entries (12,092 files, 1,053 symlinks, 972
+directories), 347,162,888 B unpacked, and no `*.pyc` at all (the pack gate finds 0 of 0).
+
 **Use `ready_timeout >= 90 s` for the first run.** It pays the unpack (14 s here) *plus* the cold start
 (14-53 s measured, 46-47 s while the machine was busy), and the sidecar's 60 s default does not cover
 both.
@@ -341,13 +346,13 @@ The shell installs and spawns the payload itself, and never on the thread that d
 
 | step | where |
 |---|---|
-| find the archive + manifest in the resource dir | `src-tauri/src/payload.rs:41` (`locate`), called from `src-tauri/src/main.rs:66` |
-| hand them to the boot manager | `BootManager::new(config_dir, payload, log)`, `src-tauri/src/sidecar.rs:169` |
-| start the first attempt | `BootManager::prepare`, `sidecar.rs:193`, from setup (`main.rs:163`) |
-| unpack on the attempt thread | `sidecar.rs:274` (`resolve`) → `payload::unpack` (`payload.rs:58`) → `ensure_unpacked` |
+| find the archive + manifest in the resource dir | `src-tauri/src/payload.rs:41` (`locate`), called from `src-tauri/src/main.rs:69` |
+| hand them to the boot manager | `BootManager::new(config_dir, payload, log)`, `src-tauri/src/sidecar.rs:189` |
+| start the first attempt | `BootManager::prepare`, `sidecar.rs:222`, from setup (`main.rs:174`) |
+| unpack on the attempt thread | `sidecar.rs:315` (`resolve`) → `payload::unpack` (`payload.rs:58`) → `ensure_unpacked` |
 | resolve against the unpacked payload | `config::load(config_dir, Some(&bundled))`, `src-tauri/src/config.rs:43` |
 | ready timeout | `config.rs:86` (`with_bundled_timeout`) raises it to 90 s (`BUNDLED_READY_TIMEOUT`, `config.rs:25`) only when the resolved command lives under the payload dir (`spawns_the_payload`, `config.rs:101`) |
-| boot page | the `preparing` phase (`boot/boot.js:20`) shows "Preparing Hermes (first run)…"; an install error publishes the error state with Retry (`sidecar.rs:274`, never a panic) |
+| boot page | the `preparing` phase (`boot/boot.js:23`) shows "Preparing Hermes (first run)…"; an install error publishes the error state with Retry (`sidecar.rs:315`, never a panic) |
 
 `locate` needs **both** files, so a build without the payload resources (the plain `cargo tauri build`)
 falls back silently to `HERMES_TAURI_URL`/`HERMES_TAURI_CMD`/`config.toml`/PATH: one binary serves both
@@ -364,10 +369,22 @@ scripts/builder.sh bash -c 'cd src-tauri && cargo tauri build --bundles deb,appi
 ```
 
 A fresh build passes the pack gate with no flag (§5.8); `--allow-build-paths` is for local
-experiments only, never a shipped artefact. Measured here
-(T16, `hermes-tauri-builder:26.04`): plain deb 8.54 MiB / AppImage 87.37 MiB, payload deb 92.80 MiB /
-AppImage 171.64 MiB — a delta of 84.3 MiB, which is the archive; the 327 MiB unpacked copy lands in the
-app-data dir on first run.
+experiments only, never a shipped artefact. It was needed while the payload had been booted in place,
+because those boots wrote `*.pyc` embedding the build path; a payload built as above carries **no**
+`*.pyc` at all, so `pack-payload.sh` passes its own check with no flag (a flag-free repack reproduces
+the identical sha256).
+
+Measured here (T16 final, `hermes-tauri-builder:26.04`, payload archive 90,932,314 B / 86.7 MiB):
+
+| bundle | deb | AppImage |
+|---|---|---|
+| plain (no payload resources) | 8,961,586 B (8.55 MiB) | 91,634,168 B (87.39 MiB) |
+| payload (`--config tauri.payload.conf.json`) | 99,832,556 B (95.21 MiB) | 182,503,928 B (174.05 MiB) |
+| delta | 90,870,970 B (86.66 MiB) | 90,869,760 B (86.66 MiB) |
+
+The delta is the archive, which both formats store compressed and neither re-compresses much. The
+347,162,888 B (331 MiB) unpacked copy lands in the app-data dir on first run and is not part of either
+bundle.
 
 **A spawned payload must not inherit the AppImage's interpreter environment.** The AppImage's `AppRun`
 exports `PYTHONHOME=$APPDIR/usr` and `PYTHONPATH=$APPDIR/usr/share/pyshared` for the GTK pieces it
