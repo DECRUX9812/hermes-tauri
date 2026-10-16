@@ -24,7 +24,10 @@ committed. One `scripts/proof.sh` run produced all of them, plus two checks that
 - `07-reload-after.png`: after F5 the webview re-navigated to `#/team` and repainted from the backend, still attached, and the Team
   page is what the reload really restores. The `reload-session` check reads the shell's log for that navigation and for the absence
   of a second window or a connection error, which is the proof that the session survived.
-- `08-deeplink.png`: the same window after a second invocation handed it the `/studio` route.
+- `08-deeplink.png`: the same window after a second invocation handed it the `/studio` route. Its bar
+  is `STUDIO_MIN_COLOURS` (100), not `MIN_COLOURS`: only the built 3D scene reaches 100, so a studio
+  stuck on its "building the studio…" loading state (which scores 10-20 and once passed as a painted
+  frame) fails the proof (see "The /studio bar" below).
 
 Checks (no PNG; each is reported as PASS or FAIL next to the shots):
 
@@ -80,6 +83,19 @@ because every run is its own fresh webview profile and seed. The retry check's s
 attempts it drives: `Hermes connection failed` twice, for the start and for the first click (both against the closed port), then
 `Hermes backend ready at http://127.0.0.1:18802` and `First frame of the Hermes app painted` after the second click.
 
+### The /studio bar (T22)
+
+T16's bundled-AppImage proof shot the studio page at 19 colours and passed: the 3D scene had not
+built yet, and `MIN_COLOURS=12` cannot tell a chrome-plus-loading-state frame from a painted page.
+T22 (see [platforms.md](platforms.md), "The /studio 3D scene under Xvfb") showed that blank-looking
+shot is the studio page's own "building the studio…" loading state, which the scene build passes
+through for 10-25 s under Xvfb before the full three.js scene renders — under the AppImage's bundled
+WebKitGTK just as under the system's. The check now waits for the real scene:
+`08-deeplink` runs with `STUDIO_MIN_COLOURS=100`, which no chrome-and-loading-state frame can reach
+(blank studio runs measured 10-20; rendered scenes measured 192-215 across T16 and T22 runs), with
+the same 45 s repaint wait plus 30 s settle as before. `scripts/proof-bundled.sh` never shoots
+`/studio` (its deep link goes to `/team`), so it needs no bar.
+
 ## Reproducing the proof (T6 build, `scripts/proof.sh`)
 
 One lock-free driver: it starts a disposable test Hermes, re-executes itself under a private D-Bus session and Xvfb, drives the shell
@@ -107,7 +123,8 @@ WebDriver or devtools is used. `xvfb-run`, `dbus-run-session`, `scrot`, `xdotool
 Output lines:
 
 - `PASS <shot>` the shot was written, its frame was painted (12 or more distinct colours on a 32x20 sample grid, or 4 for the two
-  boot-page shots 01-boot and 01b-splash, whose pages score lower) and its md5 had not appeared earlier in the run.
+  boot-page shots 01-boot and 01b-splash, whose pages score lower; 100 or more for 08-deeplink, the /studio route, see "The /studio
+  bar" below) and its md5 had not appeared earlier in the run.
 - `PASS <check>` a proof that has no screenshot: it read the shell's own log and the window list.
 - `FAIL <shot|check>: why` the artefact was written and rejected, with the reason; the run continues through the rest of the list.
 - `proof: ...` progress: the ports it picked, the shell pid and log file, and what it is waiting for.
