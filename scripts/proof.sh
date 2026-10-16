@@ -33,6 +33,12 @@ BOTS_TAB="190,48"                  # sidebar Sessions|Bots toggle, window at 0,0
 PARK="600,300"                     # neutral pointer parking spot
 DEEPLINK_SHOT_ROUTE="/studio"      # 08-deeplink: a route no earlier shot used
 MIN_COLOURS=12                     # painted app pages score well above this
+# The /studio shot gets its own bar: a blank studio (the 3D scene never built)
+# still shows the app chrome plus the "building the studio…" text and scored
+# 10-12 on the sample grid (T16's blank run: 19), while the rendered 3D scene
+# scored 199-215. 100 sits far above any chrome-and-loading-state frame, so a
+# studio that never built can no longer pass. See docs/platforms.md §Linux.
+STUDIO_MIN_COLOURS=100
 
 BIN="$DEFAULT_BIN"
 OUT="$DEFAULT_OUT"
@@ -629,9 +635,13 @@ inner_main() {
   fi
 
   # 08-deeplink: a second invocation hands another route to the running window.
+  # The route is /studio, and its bar is STUDIO_MIN_COLOURS, not MIN_COLOURS:
+  # only the built 3D scene reaches that count, so a studio stuck on its
+  # loading state fails the proof instead of slipping through as painted.
   nav_shot 08-deeplink "$DEEPLINK_SHOT_ROUTE" "Navigated to .*$DEEPLINK_SHOT_ROUTE" \
-    "$MIN_COLOURS" \
-    "the same window after a second invocation handed it the ${DEEPLINK_SHOT_ROUTE} route"
+    "$STUDIO_MIN_COLOURS" \
+    "the same window after a second invocation handed it the ${DEEPLINK_SHOT_ROUTE} route, \
+3D scene rendered"
 
   stop_shell
   # The retry check needs its own port: a free one in the test range that the
