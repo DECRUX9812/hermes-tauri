@@ -323,16 +323,105 @@ hover() {
 scroll_down() { focus_window; xdotool mousemove --sync "${SCROLL_ANCHOR%,*}" "${SCROLL_ANCHOR#*,}"; sleep 0.3; xdotool click --repeat "${1:-5}" 5; sleep 1.5; }
 scroll_up() { focus_window; xdotool mousemove --sync "${SCROLL_ANCHOR%,*}" "${SCROLL_ANCHOR#*,}"; sleep 0.3; xdotool click --repeat "${1:-6}" 4; sleep 1.5; }
 
-# replace_field <x,y> <text> — focus, select all, replace, type slowly (WebKitGTK drops fast keys)
-replace_field() {
+# ── reading and writing the form ─────────────────────────────────────────────
+#
+# WebKitGTK drops typed keys when the machine is loaded, so every edit is read back and retyped
+# until the field really holds the value. The value is read through the clipboard (select-all,
+# copy) rather than OCR: it is exact, and it is the same text the form will submit.
+
+CLIP_SENTINEL="hermes-tauri-proof-sentinel"
+
+clip_read() { timeout 4 xclip -selection clipboard -o 2>/dev/null; }
+
+clip_write() { printf '%s' "$1" | timeout 4 xclip -selection clipboard -i 2>/dev/null || true; }
+
+# Exact text of a text input or JSON editor, or empty when nothing could be read.
+read_field() {
+  local point="$1" deadline text
+  click "$point" 0.7
+  xdotool key --clearmodifiers ctrl+a
+  sleep 0.4
+  clip_write "$CLIP_SENTINEL"
+  xdotool key --clearmodifiers ctrl+c
+  deadline=$((SECONDS + 8))
+  while ((SECONDS < deadline)); do
+    sleep 0.4
+    text="$(clip_read)"
+    [[ -n "$text" && "$text" != "$CLIP_SENTINEL" ]] && { printf '%s' "$text"; return 0; }
+  done
+  printf ''
+}
+
+# set_field <x,y> <text> — clear the field and type until the read-back matches exactly.
+set_field() {
+  local point="$1" text="$2" attempt delay got
+  for attempt in 1 2 3 4; do
+    case "$attempt" in
+      1) delay=150 ;;
+      2) delay=350 ;;
+      3) delay=700 ;;
+      *) delay=1200 ;;
+    esac
+    click "$point" 0.6
+    xdotool key --clearmodifiers ctrl+a
+    sleep 0.4
+    xdotool key --clearmodifiers BackSpace
+    sleep 0.6
+    xdotool type --delay "$delay" "$text"
+    sleep 1.2
+    got="$(read_field "$point")"
+    if [[ "$got" == "$text" ]]; then return 0; fi
+    printf 'proof-plugin-settings: field %s held %q after attempt %s (wanted %q), retrying\n' \
+      "$point" "${got:0:60}" "$attempt" "$text"
+  done
+  return 1
+}
+
+# type_secret <x,y> <text> — a masked input cannot be read back, so it is typed at the slowest
+# cadence and proven instead by the value that reaches the test home's .env.
+type_secret() {
   local point="$1" text="$2"
   click "$point" 0.6
   xdotool key --clearmodifiers ctrl+a
-  sleep 0.35
+  sleep 0.4
   xdotool key --clearmodifiers BackSpace
-  sleep 0.5
-  xdotool type --delay 300 "$text"
-  sleep 1.0
+  sleep 0.6
+  xdotool type --delay 900 "$text"
+  sleep 1.5
+}
+
+# The verbose switch's track: near-black when off, brand blue when on. Classified by channel
+# relationship rather than an exact triple — the rendered colour varies slightly by GPU path.
+SWITCH_PROBE="1070,527"
+
+# "on" / "off" / "unknown" from the switch's track pixel.
+switch_state() {
+  scrot -o "$WORK/switch.png" 2>/dev/null || { printf 'unknown'; return; }
+  python3 "$WORK/probe_pixel.py" "$WORK/switch.png" switch "$SWITCH_PROBE" 2>/dev/null | tr -d '\n'
+  printf '\n'
+}
+
+# set_switch <x,y> <on|off> — click until the switch reports the wanted state.
+set_switch() {
+  local point="$1" want="$2" attempt state
+  for attempt in 1 2 3 4; do
+    state="$(switch_state)"
+    if [[ "$state" == "$want" ]]; then return 0; fi
+    click "$point" 1.4
+  done
+  state="$(switch_state)"
+  [[ "$state" == "$want" ]]
+}
+
+# set_mode — pick an option from the schema dropdown and confirm the closed control shows it.
+set_mode() {
+  local attempt
+  for attempt in 1 2 3; do
+    click "$FIELD_MODE" 1.4
+    click "$MODE_OPTION_CAREFUL" 1.6
+    if wait_text "$REGION_MODE" 'careful' 1 10; then return 0; fi
+  done
+  return 1
 }
 
 shot() {
@@ -356,6 +445,7 @@ REGION_INSTALL="1050,92,160,30"   # the Plugins tab's "Install from Git" button
 REGION_ROW="312,178,320,30"       # the demo-settings row title
 REGION_SAVE="980,178,180,34"      # the form's "Save settings" button
 REGION_API_URL="905,258,270,26"   # the form's API URL input
+REGION_MODE="1020,326,90,26"      # the form's Mode dropdown
 REGION_SECRET="1100,610,320,45"   # the masked secret input
 
 # OCR text of a "x,y,w,h" region.
@@ -427,29 +517,35 @@ wait_app_ready() {
   return 1
 }
 
-# The rail is icon-only, so the page is confirmed by OCR rather than assumed; the candidate list
-# absorbs a small vertical shift in this build's rail layout, and each candidate is clicked twice
-# because the first click can land while the page is still repainting.
+# The rail is icon-only, so the page is confirmed by the app's own rail indicator (a cheap pixel
+# read) rather than assumed; the candidate list absorbs a small vertical shift in the layout.
+RAIL_ROW_CAPABILITIES_LOW=190
+RAIL_ROW_CAPABILITIES_HIGH=235
+RAIL_ROW_PLUGINS_DOOR_LOW=455
+RAIL_ROW_PLUGINS_DOOR_HIGH=495
+
 goto_capabilities() {
-  local point attempt
+  local point
   for point in "${RAIL_CAPABILITIES_CANDIDATES[@]}"; do
-    for attempt in 1 2; do
-      click "$point" 3
-      wait_painted "$MIN_COLOURS" 30 || true
-      if wait_text "$REGION_TABS" 'Connectors' 1 12; then
-        printf 'proof-plugin-settings: the rail icon at %s opened Capabilities\n' "$point"
-        return 0
-      fi
-    done
+    click "$point" 2
+    wait_painted "$MIN_COLOURS" 30 || true
+    if wait_indicator "$RAIL_ROW_CAPABILITIES_LOW" "$RAIL_ROW_CAPABILITIES_HIGH" 15; then
+      printf 'proof-plugin-settings: the rail icon at %s opened Capabilities\n' "$point"
+      return 0
+    fi
   done
   return 1
 }
 
+# Clicking the Plugins tab also moves the indicator onto the plugins door, so the same cheap check
+# confirms the tab took before any text is read.
 open_plugins_tab() {
   local attempt
   for attempt in 1 2 3; do
-    click "$TABS_PLUGINS" 3
-    wait_text "$REGION_INSTALL" 'Install' 1 20 && return 0
+    click "$TABS_PLUGINS" 2
+    if wait_indicator "$RAIL_ROW_PLUGINS_DOOR_LOW" "$RAIL_ROW_PLUGINS_DOOR_HIGH" 15; then
+      wait_text "$REGION_INSTALL" 'Install' 1 20 && return 0
+    fi
   done
   return 1
 }
@@ -459,7 +555,7 @@ inner_main() {
   command -v xdpyinfo >/dev/null 2>&1 || die 'xdpyinfo is required'
   xdpyinfo >/dev/null 2>&1 || die "no usable X display (DISPLAY=${DISPLAY:-<unset>})"
   [[ -x "$BIN" ]] || die "not executable: $BIN"
-  for tool in scrot xdotool xwd tesseract python3; do
+  for tool in scrot xdotool xwd tesseract xclip python3; do
     command -v "$tool" >/dev/null 2>&1 || die "$tool is required"
   done
 
@@ -528,18 +624,24 @@ SH
     record 09-plugin-settings-form FAIL 'the settings form never opened'
   fi
 
-  # 3. Change one value of each non-secret type and save.
-  replace_field "$FIELD_API_URL" "https://api.example.com/v2"
-  replace_field "$FIELD_RETRIES" "7"
-  replace_field "$FIELD_TIMEOUT" "4.5"
-  click "$FIELD_MODE" 1.2
-  click "$MODE_OPTION_CAREFUL" 1.5
-  click "$FIELD_VERBOSE" 1.2
+  # 3. Change one value of every non-secret type. Each edit confirms itself before the next one
+  #    starts: typed text is read back through the clipboard and retyped, the dropdown is
+  #    re-opened until the closed control reads "careful", and the switch is re-clicked until its
+  #    track pixel says on. WebKitGTK drops typed keys under load, so an unverified edit would
+  #    surface later as a mysterious config.yaml mismatch.
+  local edits_ok=1
+  set_field "$FIELD_API_URL" "https://api.example.com/v2" || edits_ok=0
+  set_field "$FIELD_RETRIES" "7" || edits_ok=0
+  set_field "$FIELD_TIMEOUT" "4.5" || edits_ok=0
+  set_mode || edits_ok=0
+  set_switch "$FIELD_VERBOSE" on || edits_ok=0
   scroll_down 5
-  replace_field "$EDITOR_TAGS" '["demo", "launch"]'
-  replace_field "$EDITOR_LIMITS" '{"rps": 9, "burst": 2}'
+  set_field "$EDITOR_TAGS" '["demo", "launch"]' || edits_ok=0
+  set_field "$EDITOR_LIMITS" '{"rps": 9, "burst": 2}' || edits_ok=0
   # 4. A fake secret goes in the masked field; it must land in .env, never config.yaml.
-  replace_field "$FIELD_SECRET" "$FAKE_SECRET"
+  type_secret "$FIELD_SECRET" "$FAKE_SECRET"
+  record 'every field edit took' "$([[ "$edits_ok" == 1 ]] && printf PASS || printf FAIL)" \
+    'API URL, Retries, Timeout, Mode, Verbose, Tags, Limits and the secret each confirmed on screen'
   shot 09b-plugin-settings-secret "$MIN_COLOURS" \
     "the same form scrolled down: the JSON editors and the masked secret field (dots, never plaintext)"
   assert_secret_masked
@@ -611,16 +713,28 @@ wait_saved_block() {
   return 1
 }
 
+# The value the credential route wrote for DEMO_SETTINGS_API_KEY, or empty when it is absent.
+env_secret() { sed -n 's/^DEMO_SETTINGS_API_KEY=//p' "$1/.env" 2>/dev/null | head -n 1; }
+
 # Saves the form and confirms the backend wrote it. Saving again is idempotent (the same values,
 # and the secret is rewritten with the same value), so a click the webview dropped — or a save
-# whose two writes did not both land — is retried instead of failing the proof.
+# whose two writes did not both land — is retried instead of failing the proof. A secret that
+# reached .env truncated is retyped before the retry: the masked field cannot be read back, so
+# the file is the only place its content can be checked.
 save_settings() {
   local home="$1" attempt
   for attempt in 1 2 3; do
     scroll_up 8
     click "$BUTTON_SAVE" 5
-    wait_saved_block "$home" 25 && return 0
-    printf 'proof-plugin-settings: save attempt %s did not reach config.yaml yet, retrying\n' "$attempt"
+    if ! wait_saved_block "$home" 25; then
+      printf 'proof-plugin-settings: save attempt %s did not reach config.yaml yet, retrying\n' "$attempt"
+      continue
+    fi
+    if [[ "$(env_secret "$home")" == "$FAKE_SECRET" ]]; then return 0; fi
+    printf 'proof-plugin-settings: the secret reached .env as %q, retyping it\n' \
+      "$(env_secret "$home" | cut -c1-12)"
+    scroll_down 5
+    type_secret "$FIELD_SECRET" "$FAKE_SECRET"
   done
   printf 'proof-plugin-settings: the form never saved after 3 attempts\n'
   return 1
@@ -684,15 +798,19 @@ assert_saved() {
     record 'config.yaml has no secret' PASS 'no api_key key under plugins.entries.demo-settings.settings'
   fi
 
-  env_line=""
+  local got=""
   deadline=$((SECONDS + 30))
   while ((SECONDS < deadline)); do
-    env_line="$(grep -m1 '^DEMO_SETTINGS_API_KEY=' "$home/.env" 2>/dev/null || true)"
-    [[ -n "$env_line" ]] && break
+    got="$(env_secret "$home")"
+    [[ "$got" == "$FAKE_SECRET" ]] && break
     sleep 1.5
   done
-  if [[ -n "$env_line" ]]; then
-    record '.env carries the secret' PASS "DEMO_SETTINGS_API_KEY=${FAKE_SECRET:0:9}… (value redacted past its prefix)"
+  if [[ "$got" == "$FAKE_SECRET" ]]; then
+    record '.env carries the secret' PASS \
+      "DEMO_SETTINGS_API_KEY=${FAKE_SECRET:0:9}… matches the typed value exactly (redacted past its prefix)"
+  elif [[ -n "$got" ]]; then
+    record '.env carries the secret' FAIL \
+      "DEMO_SETTINGS_API_KEY reached .env truncated: ${#got} of ${#FAKE_SECRET} characters"
   else
     record '.env carries the secret' FAIL 'DEMO_SETTINGS_API_KEY is missing from the test home .env'
   fi
@@ -706,6 +824,77 @@ write_helpers() {
   write_png_colours
   write_crop
   write_rail_dark
+  write_probe_pixel
+}
+
+write_probe_pixel() {
+  cat >"$WORK/probe_pixel.py" <<'PY'
+"""Read the shell's rail indicator and the verbose switch's track from a scrot PNG.
+
+The rail indicator is the brand-coloured bar the app draws at the left edge beside the entry you
+are on, so its row says which page is showing without reading any text. The switch's track says
+whether a `bool` field is on; its rendered colour varies slightly with the GPU path, so the classes
+are channel relationships rather than exact triples.
+"""
+import sys
+
+from PIL import Image
+
+INDICATOR_X = range(0, 4)
+INDICATOR_BLUE = lambda r, g, b: b > 200 and r < 120 and g < 160  # noqa: E731
+
+
+def indicator_row(px, height):
+    """The indicator's vertical centre, or -1 when the page shows no indicator."""
+    rows = [y for y in range(height) if any(INDICATOR_BLUE(*px[x, y]) for x in INDICATOR_X)]
+    return (rows[0] + rows[-1]) // 2 if rows else -1
+
+
+def classify_switch(rgb):
+    r, g, b = rgb
+    if r < 80 and g < 150 and b > 200:
+        return "on"
+    if r < 90 and g < 90 and b < 90:
+        return "off"
+    return "unknown"
+
+
+def main():
+    path, mode = sys.argv[1:3]
+    image = Image.open(path).convert("RGB")
+    if mode == "indicator":
+        print(indicator_row(image.load(), image.height))
+        return 0
+    x, y = (int(part) for part in sys.argv[3].split(","))
+    print(classify_switch(image.getpixel((x, y))))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+PY
+}
+
+# Row of the rail indicator, or -1 when nothing is marked. Measured: ~90 on the Sessions panel,
+# ~211 on Capabilities, ~475 on the plugins door.
+rail_indicator() {
+  local row=""
+  scrot -o "$WORK/rail.png" 2>/dev/null || { printf -- '-1'; return; }
+  row="$(python3 "$WORK/probe_pixel.py" "$WORK/rail.png" indicator 2>/dev/null | tr -dc '0-9-')"
+  printf '%s' "${row:--1}"
+}
+
+# Waits for the rail indicator to land in a band, i.e. for the app to be on that page.
+wait_indicator() {
+  local low="$1" high="$2" timeout="${3:-25}" deadline=$((SECONDS + ${3:-25})) row=""
+  while ((SECONDS < deadline)); do
+    row="$(rail_indicator)"
+    if [[ -n "$row" ]] && ((row >= low && row <= high)); then return 0; fi
+    sleep 0.7
+  done
+  printf 'proof-plugin-settings: the rail indicator stayed at %s (wanted %s..%s)\n' \
+    "${row:-unreadable}" "$low" "$high"
+  return 1
 }
 
 write_frame_colours() {
