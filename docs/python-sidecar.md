@@ -329,8 +329,9 @@ Measured on the real 341 MB payload (T16b, inside `hermes-tauri-builder:26.04`):
 | boot to `/healthz` = 200 | 14.4 s (T15 measured 16.1 s, T10 16-20 s) |
 
 T16's final archive, packed from the refreshed payload (see §5.9), is bigger because it is a newer
-`hermes_plus`: 90,932,587 B (86.7 MiB), sha256 `659ee18f…`, 14,117 entries (12,092 files, 1,053
-symlinks, 972 directories), 347,166,192 B unpacked, 213 s to pack at level 19 with 4 workers.
+`hermes_plus`, and it is the clean one T21 packs without `--allow-build-paths`: 90,932,314 B (86.7 MiB),
+sha256 `2b4ca0ae…`, version `2026-10-15T23-00-58Z`, 14,117 entries (12,092 files, 1,053 symlinks, 972
+directories), 347,162,888 B unpacked, and no `*.pyc` at all (the pack gate finds 0 of 0).
 
 **Use `ready_timeout >= 90 s` for the first run.** It pays the unpack (14 s here) *plus* the cold start
 (14-53 s measured, 46-47 s while the machine was busy), and the sidecar's 60 s default does not cover
@@ -373,16 +374,16 @@ because those boots wrote `*.pyc` embedding the build path; a payload built as a
 `*.pyc` at all, so `pack-payload.sh` passes its own check with no flag (a flag-free repack reproduces
 the identical sha256).
 
-Measured here (T16 final, `hermes-tauri-builder:26.04`, payload archive 90,932,587 B / 86.7 MiB):
+Measured here (T16 final, `hermes-tauri-builder:26.04`, payload archive 90,932,314 B / 86.7 MiB):
 
 | bundle | deb | AppImage |
 |---|---|---|
 | plain (no payload resources) | 8,961,586 B (8.55 MiB) | 91,634,168 B (87.39 MiB) |
-| payload (`--config tauri.payload.conf.json`) | 99,831,768 B (95.21 MiB) | 182,503,928 B (174.05 MiB) |
-| delta | 90,870,182 B (86.66 MiB) | 90,869,760 B (86.66 MiB) |
+| payload (`--config tauri.payload.conf.json`) | 99,832,556 B (95.21 MiB) | 182,503,928 B (174.05 MiB) |
+| delta | 90,870,970 B (86.66 MiB) | 90,869,760 B (86.66 MiB) |
 
 The delta is the archive, which both formats store compressed and neither re-compresses much. The
-347,166,192 B (331 MiB) unpacked copy lands in the app-data dir on first run and is not part of either
+347,162,888 B (331 MiB) unpacked copy lands in the app-data dir on first run and is not part of either
 bundle.
 
 **A spawned payload must not inherit the AppImage's interpreter environment.** The AppImage's `AppRun`
