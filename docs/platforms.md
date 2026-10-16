@@ -2,6 +2,8 @@
 
 This document defines the implementation, verification status, known behaviors, and outstanding requirements for each supported platform in the Hermes Tauri shell project.
 
+Linux x86_64 was developed and proven by hand on a workstation. Every target in the matrix is also built in GitHub Actions; the first fully green run is [38908187910](https://github.com/DECRUX9812/hermes-tauri/actions/runs/38908187910). Windows and macOS are **CI-built**: their builds, bundles, Rust tests and a headless launch smoke test pass in CI, but no one has used them interactively yet.
+
 ---
 
 ## Status by Platform
@@ -40,7 +42,8 @@ ports 18800-18899:
 Behaviour that is only exercised on other systems, or under a real desktop session, is described
 below. The known cross-cutting limitations are collected in the [README](../README.md#known-limitations).
 
-#### Written but not run (CI Matrix)
+#### Built in CI ([run 38908187910](https://github.com/DECRUX9812/hermes-tauri/actions/runs/38908187910), 2026-10-16)
+- **Result**: build, bundle and headless launch smoke test (Xvfb) green; Rust tests run in the `check` job. Not used interactively by a person yet.
 - **CI Runner**: `ubuntu-22.04` ([build.yml:96](../.github/workflows/build.yml#L96))
 - **Target Triple**: `x86_64-unknown-linux-gnu` ([build.yml:97](../.github/workflows/build.yml#L97))
 - **Bundles Configured**: `deb,appimage,rpm` ([build.yml:98](../.github/workflows/build.yml#L98))
@@ -87,7 +90,8 @@ bundle, no binary, no rendering.
   not cover anything that needs a real ARM process: WebKitGTK for the target, the bundle, startup,
   rendering, or native ARM hardware.
 
-#### Written but not run (CI Matrix)
+#### Built in CI ([run 38908187910](https://github.com/DECRUX9812/hermes-tauri/actions/runs/38908187910), 2026-10-16)
+- **Result**: build, bundle and headless launch smoke test (Xvfb) green on the native ARM runner. Not used interactively by a person yet.
 - **Job kind**: the matrix *builds and bundles* on a native ARM runner (`tauri-apps/tauri-action`); no
   CI job runs `cargo check` or clippy for this triple. The cross-check above is the only type-check the
   aarch64 code paths get before that builder runs.
@@ -118,7 +122,8 @@ the bundle). The one behaviour that differs is by design and in-code: without `/
 `ProcessGroup::has_live_members` falls back to the signal probe
 ([process/unix.rs](../crates/hermes-sidecar/src/process/unix.rs)). The same holds for §4.
 
-#### Written but not run (CI Matrix)
+#### Built in CI ([run 38908187910](https://github.com/DECRUX9812/hermes-tauri/actions/runs/38908187910), 2026-10-16)
+- **Result**: build, bundle, `cargo test --workspace` and launch smoke test green; unsigned. Not used interactively by a person yet.
 - **CI Runner**: `macos-14` (Apple Silicon M1 runner) ([build.yml:102](../.github/workflows/build.yml#L102))
 - **Target Triple**: `aarch64-apple-darwin` ([build.yml:103](../.github/workflows/build.yml#L103))
 - **Bundles Configured**: `app,dmg` ([build.yml:104](../.github/workflows/build.yml#L104))
@@ -139,7 +144,8 @@ the bundle). The one behaviour that differs is by design and in-code: without `/
 #### Verified on the dev workstation
 nothing verified yet
 
-#### Written but not run (CI Matrix)
+#### Built in CI ([run 38908187910](https://github.com/DECRUX9812/hermes-tauri/actions/runs/38908187910), 2026-10-16)
+- **Result**: build and bundle green (cross-compiled on the ARM runner, not launched); unsigned. Not used interactively by a person yet.
 - **CI Runner**: `macos-14` (cross-compiling on Apple Silicon runner) ([build.yml:105](../.github/workflows/build.yml#L105))
 - **Target Triple**: `x86_64-apple-darwin` ([build.yml:106](../.github/workflows/build.yml#L106))
 - **Bundles Configured**: `app,dmg` ([build.yml:107](../.github/workflows/build.yml#L107))
@@ -177,7 +183,8 @@ first. Nothing was executed: no `.exe`, no installer, no runtime behavior.
   `zstd-sys 2.1.1` (through `hermes-shell-config`) compile for the target in these runs. `cargo check`
   emits metadata and never links, so no C artifact is consumed.
 
-#### Written but not run (CI Matrix)
+#### Built in CI ([run 38908187910](https://github.com/DECRUX9812/hermes-tauri/actions/runs/38908187910), 2026-10-16)
+- **Result**: build, bundle, `cargo test --workspace` and launch smoke test green; unsigned. Not used interactively by a person yet.
 - **CI Runner**: `windows-latest` ([build.yml:108](../.github/workflows/build.yml#L108))
 - **Target Triple**: `x86_64-pc-windows-msvc` ([build.yml:109](../.github/workflows/build.yml#L109))
 - **Bundles Configured**: `nsis,msi` ([build.yml:110](../.github/workflows/build.yml#L110))
@@ -185,8 +192,8 @@ first. Nothing was executed: no `.exe`, no installer, no runtime behavior.
 - **Code Signing**: Currently commented out in [build.yml:155-157](../.github/workflows/build.yml#L155-157). Builds run unsigned by default.
 - **Code Quality**: The Linux `check` job installs the Windows target and runs `cargo check --all-targets` and `cargo clippy --all-targets -D warnings` for `hermes-sidecar` and `hermes-shell-config` ([build.yml:57-86](../.github/workflows/build.yml#L57-86)), so Windows-only code fails CI instead of waiting for this runner. No lint is allowed there: the one that used to be (`clippy::result_large_err` for `ConfigError::ConfigFile`) is fixed by boxing that error's `toml::de::Error`.
 
-#### Fixed since the R7 audit (compile-checked, never run)
-The R7 audit found that no `cfg(windows)` code had ever been compiled. These are fixed; all of them are type-checked for `x86_64-pc-windows-msvc` and none has been executed:
+#### Fixed since the R7 audit (built and tested in CI)
+The R7 audit found that no `cfg(windows)` code had ever been compiled. These are fixed. All of them are compiled on `windows-latest` in CI, where the workspace tests and a launch smoke test pass. None has been exercised interactively:
 - `crates/hermes-sidecar/Cargo.toml` enables the two `windows-sys` features the Job Object code needs: `Win32_Security` for `CreateJobObjectW` (its signature takes `SECURITY_ATTRIBUTES`) and `Win32_System_Threading` for `JOBOBJECT_EXTENDED_LIMIT_INFORMATION` (it embeds `IO_COUNTERS`).
 - `ProcessGroup::has_live_members` exists on Windows ([process/windows.rs](../crates/hermes-sidecar/src/process/windows.rs)), so the shutdown wait in `backend.rs` compiles there.
 - A `.cmd`/`.bat` backend is now run through `cmd.exe` with a command line the shell builds itself ([src/batch.rs](../crates/hermes-sidecar/src/batch.rs), unit-tested on Linux). `CreateProcessW` cannot start a batch file, and Rust's `Command` only manages it through an undocumented `CreateProcessW` feature that the standard library documents as something that "may be removed in the future" (`std::process`, "Batch file special handling"). This is the path the `hermes.cmd` entry in `EXECUTABLE_NAMES` takes.
