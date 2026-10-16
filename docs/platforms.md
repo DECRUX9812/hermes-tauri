@@ -51,7 +51,8 @@ below. The known cross-cutting limitations are collected in the [README](../READ
 1. ~~Complete the Xvfb headless runtime proof~~ Done in T6: `scripts/proof.sh` drives the shell under
    `dbus-run-session -- xvfb-run` and writes 9 verified screenshots plus two checks (the reload keeps the
    session; the splash cap removes the always-on-top window). See [docs/proof.md](proof.md). WebGL/studio
-   rendering and the long-run memory footprint are still open.
+   rendering under the AppImage was resolved in T22 (the blank shot was the studio's own loading state;
+   see "The /studio 3D scene under Xvfb (T22)" above); the long-run memory footprint is still open.
 2. Verify package installation on native host distros (Debian, Ubuntu, Fedora/RHEL, Arch) rather than containerized environments.
 3. Validate desktop environment integration under both GNOME Shell (with and without the AppIndicator extension) and KDE Plasma.
 4. Verify Wayland vs X11 behavior for global window toggling (X11 only via `global-hotkey`; requires active XWayland window focus on Wayland sessions) and deep-link activation.
@@ -175,6 +176,35 @@ WebKitGTK 2.42+ introduced hardware-accelerated buffer sharing via DMA-BUF by de
 - Upstream Tauri Issue: [tauri-apps/tauri #8421](https://github.com/tauri-apps/tauri/issues/8421)
 
 **Mitigation**: The shell explicitly sets `std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1")` before initializing the webview unless overridden by the user.
+
+#### The /studio 3D scene under Xvfb (T22)
+
+T16 recorded the studio page's 3D scene as blank under the payload AppImage (19 distinct colours on
+the proof's 32x20 sample grid vs 215 with the system WebKitGTK, same script) and left the root cause
+open. T22 reproduced a blank-looking studio shot but showed it is the page's own "building the
+studio…" loading state, not a rendering-engine failure:
+
+- **Versions are identical.** The payload AppImage bundles WebKitGTK `2.52.6-0ubuntu0.26.04.1`
+  (package stamp inside the AppDir), the same release as the system's `libwebkit2gtk-4.1-0`
+  (`dpkg -l`). The AppImage bundles no Mesa/GL libraries, so both sides render GL through the same
+  host stack.
+- **The bundled-WebKit side renders the scene.** The T16 payload AppImage with its default
+  environment (the shell's `WEBKIT_DISABLE_DMABUF_RENDERER=1` included) built and rendered the full
+  3D scene under Xvfb in 3 of 3 runs (195, 205, 199 grid colours), 16-26 s after the deep link.
+- **The blank state is the loading state.** The scene build (three.js plus WASM workers under
+  software GL) passes through low-colour frames for 10-25 s: the repeat run scored 19 then 12 before
+  rendering 205 at t=23 s. T16's 19-colour shot caught exactly this state, and `MIN_COLOURS=12`
+  could not reject it.
+- **Processes and sandbox are not factors.** `WebKitWebProcess` and `WebKitNetworkProcess` stayed
+  alive in every AppImage run while the scene was pending, and
+  `WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1` rendered too (199). `GSK_RENDERER=cairo`, "stuck" in
+  an earlier run, rendered under a healthy machine (202).
+- **An earlier knob matrix is void.** The first T22 matrix was run under machine-wide memory
+  pressure (the runner was OOM-killed mid-run); with a healthy machine every cell renders, including
+  cells whose environment was identical to the default's.
+- **Proof change.** `scripts/proof.sh` gives the `/studio` shot its own bar, `STUDIO_MIN_COLOURS=100`:
+  only the built scene reaches it, so a studio stuck on its loading state fails the proof. See
+  [proof.md](proof.md).
 
 ---
 
