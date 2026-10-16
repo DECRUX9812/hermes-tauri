@@ -42,9 +42,9 @@ Runs code quality and verification checks on every push, PR, and tag:
 
   No lint is allowed here: `ConfigError::ConfigFile` in `crates/hermes-shell-config/src/config.rs` used to trip `clippy::result_large_err` on this target (not on Linux), and its `toml::de::Error` payload is now boxed, so the same `-D warnings` as everywhere else applies. The only other Windows-only compile break this step ever found was a Unix-only integration test that lacked its `#![cfg(unix)]` gate.
 
-  Before this, `cfg(windows)` code was never compiled anywhere: this job built only the Linux target, and the Windows runner only ran the build, so two missing `windows-sys` features and a missing method in `hermes-sidecar` stayed invisible until `cargo tauri build` on Windows. `src-tauri` is not part of this check: its Windows paths are compiled by the `build` job on the real runner with the real toolchain.
+  Before this, `cfg(windows)` code was never compiled anywhere: this job built only the Linux target, and the Windows runner only ran the build, so two missing `windows-sys` features and a missing method in `hermes-sidecar` stayed invisible until `cargo tauri build` on Windows. `src-tauri` is not part of this check: its Windows paths are compiled by the `build` job on the real runner with the real toolchain. Widening this step to the whole workspace is possible but needs more than a target: `tauri-build` runs `tauri-winres` for `src-tauri`, which embeds the icon and manifest through a Windows resource compiler and fails with `NotAttempted("llvm-rc")` without one (`llvm-rc` from the `llvm` package is enough; T23 checked the whole workspace for this target this way). The two-crate step stays clear of `tauri-build` entirely, so it needs no resource compiler.
 
-  The step points `CC_x86_64_pc_windows_msvc` and `AR_x86_64_pc_windows_msvc` at a no-op tool it creates itself. `cargo check` emits metadata and never links, so the C and assembly parts of the one C dependency (`ring`, through `ureq`'s TLS) are not needed on a runner without an MSVC toolchain, and no C artifact reaches a link step. The Rust-level checking of `cfg(windows)` code is unaffected; the `build` job still compiles the real thing with MSVC.
+  The step points `CC_x86_64_pc_windows_msvc` and `AR_x86_64_pc_windows_msvc` at a no-op tool it creates itself. `cargo check` emits metadata and never links, so the C and assembly parts of the two C dependencies (`ring`, through `ureq`'s TLS, and `zstd-sys`, through `hermes-shell-config`) are not needed on a runner without an MSVC toolchain, and no C artifact reaches a link step. The Rust-level checking of `cfg(windows)` code is unaffected; the `build` job still compiles the real thing with MSVC.
 
 Clippy, the tests, and the release build pass `--locked`, so CI builds from the committed `Cargo.lock` and fails instead of re-resolving it.
 
@@ -64,6 +64,8 @@ Compiles the application across the target operating system matrix.
 | macOS ARM64 | `macos-14` | `aarch64-apple-darwin` | `app,dmg` |
 | macOS x64 (Cross) | `macos-14` | `x86_64-apple-darwin` | `app,dmg` |
 | Windows x64 | `windows-latest` | `x86_64-pc-windows-msvc` | `nsis,msi` |
+
+Every row here is a *build* job. Only the Linux x86_64 target is additionally type-checked and linted (`check` job), plus the Windows-target cross-check of the two pure-Rust crates; no job runs `cargo check` or clippy for `aarch64-unknown-linux-gnu` or for either macOS triple before its builder starts. A workspace check and clippy for `aarch64-unknown-linux-gnu` and for `x86_64-pc-windows-msvc` were run on the dev workstation instead (T23; recipe and results in [platforms.md](platforms.md#2-linux-aarch64-aarch64-unknown-linux-gnu) and its Windows section).
 
 ##### Signing Environment Preparation
 The `Prepare signing environment` step runs with `shell: bash` on every runner. Its script is bash (`set -euo pipefail`, `${!var}`, heredocs, `openssl`), and `run:` on a Windows runner defaults to PowerShell, where the step used to exit non-zero before the build had even started. Git Bash is present on `windows-latest`, so the same script now runs there.

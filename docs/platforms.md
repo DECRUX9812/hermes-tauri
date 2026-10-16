@@ -62,16 +62,43 @@ below. The known cross-cutting limitations are collected in the [README](../READ
 ### 2. Linux aarch64 (`aarch64-unknown-linux-gnu`)
 
 #### Verified on the dev workstation
-nothing verified yet
+The whole workspace **type-checks and lints** for `aarch64-unknown-linux-gnu` on this workstation since
+T23 (cross-wise, no ARM machine involved). Nothing was built or run for the target: no linker step, no
+bundle, no binary, no rendering.
+
+- **Toolchain**: `hermes-tauri-builder:26.04` has no rustup and its distro `rustc` rejects upstream std
+  rlibs, so the aarch64 std comes from the official 1.93.1 components T17 assembled in the shared cache
+  (`~/.cache/hermes-tauri/cross/toolchain`, `lib/rustlib/aarch64-unknown-linux-gnu`, the component's
+  sha256 checked against `channel-rust-1.93.1.toml`), and the cross C toolchain from
+  `crossbuild-essential-arm64`. Both `ring` and `zstd-sys` really compile for aarch64 with
+  `aarch64-linux-gnu-gcc` 15.2.0 (no stand-in); the container installs the cross toolchain for that run
+  only, the builder image is not rebuilt.
+- **Commands** (each in one lock hold, a `scripts/builder.sh`-shaped container run; the GTK/WebKitGTK
+  `-dev` headers come from the image, `PKG_CONFIG_ALLOW_CROSS=1` lets their build scripts read the host's
+  amd64 `.pc` files, which only shapes `-L`/cfg flags and is harmless because nothing links):
+  - `cargo check --workspace --locked --target aarch64-unknown-linux-gnu` — exit 0, 3m32s, no warnings
+    (all three members checked: `hermes-sidecar`, `hermes-shell-config`, `hermes-tauri`).
+  - `cargo clippy --workspace --locked --target aarch64-unknown-linux-gnu -- -D warnings` — exit 0.
+  - `cargo clippy --workspace --all-targets ... -- -D warnings` and
+    `cargo check --workspace --tests ...` — exit 0, so the test targets type-check too.
+- **What that covers**: every `cfg` arm this triple selects is valid for aarch64-linux, including the
+  `cfg(unix)` process, payload and permission code, which is exactly the code macOS also uses. It does
+  not cover anything that needs a real ARM process: WebKitGTK for the target, the bundle, startup,
+  rendering, or native ARM hardware.
 
 #### Written but not run (CI Matrix)
+- **Job kind**: the matrix *builds and bundles* on a native ARM runner (`tauri-apps/tauri-action`); no
+  CI job runs `cargo check` or clippy for this triple. The cross-check above is the only type-check the
+  aarch64 code paths get before that builder runs.
 - **CI Runner**: `ubuntu-22.04-arm` ([build.yml:99](../.github/workflows/build.yml#L99))
 - **Target Triple**: `aarch64-unknown-linux-gnu` ([build.yml:100](../.github/workflows/build.yml#L100))
 - **Bundles Configured**: `deb,appimage` ([build.yml:101](../.github/workflows/build.yml#L101))
 - **Artifact Upload**: Uploaded as `bundle-aarch64-unknown-linux-gnu` ([build.yml:209](../.github/workflows/build.yml#L209)) containing `.deb`, `.AppImage`, and conditional `.AppImage.sig` ([build.yml:213,215-216](../.github/workflows/build.yml#L213-215-216)). (RPM is not configured for ARM64).
 
 #### What is left
-1. Execute the GitHub Actions workflow on an actual `ubuntu-22.04-arm` runner to verify compilation and packaging of WebKitGTK dependencies on ARM64.
+1. Build, package and run on ARM64: the CI `build` job is the only place a real aarch64 binary, its
+   bundles and ARM64 WebKitGTK packaging are produced, and no part of it has run. The check above does
+   not substitute for it: it never links, and the target gets no WebKitGTK of its own.
 2. Test installation and launch on physical ARM64 Linux hardware (e.g. Raspberry Pi 5, Asahi Linux on Apple Silicon, Ampere Altra cloud instances).
 3. Validate WebKitGTK JIT compatibility and performance on ARM64 Linux kernels.
 4. Verify `WEBKIT_DISABLE_DMABUF_RENDERER=1` behavior on ARM GPU drivers (Mali, VideoCore, Panfrost) *(unconfirmed on non-Mesa drivers)*.
@@ -81,7 +108,14 @@ nothing verified yet
 ### 3. macOS ARM64 (`aarch64-apple-darwin`)
 
 #### Verified on the dev workstation
-nothing verified yet
+nothing verified yet. What the code review established (R7, re-checked in T23): there is **no
+`cfg(target_os = "macos")` code anywhere** in the workspace, so macOS takes the same `cfg(unix)` paths
+the Linux x86_64 gate compiles, and every crate the shell leans on for macOS behaviour has that platform
+(`global-hotkey` 0.8.0 `platform_impl/macos`, `tauri-plugin-single-instance` `platform_impl/macos.rs`,
+`tauri-plugin-deep-link`'s Apple Event path, `tauri-plugin-updater`'s macOS deps, `icon.icns` present for
+the bundle). The one behaviour that differs is by design and in-code: without `/proc`,
+`ProcessGroup::has_live_members` falls back to the signal probe
+([process/unix.rs](../crates/hermes-sidecar/src/process/unix.rs)). The same holds for §4.
 
 #### Written but not run (CI Matrix)
 - **CI Runner**: `macos-14` (Apple Silicon M1 runner) ([build.yml:102](../.github/workflows/build.yml#L102))
@@ -122,7 +156,25 @@ nothing verified yet
 ### 5. Windows x64 (`x86_64-pc-windows-msvc`)
 
 #### Verified on the dev workstation
-nothing verified yet
+Cross-checked from Linux at **workspace level** since T23; T17/T20 covered the two pure-Rust crates
+first. Nothing was executed: no `.exe`, no installer, no runtime behavior.
+
+- **Commands** (upstream 1.93.1 toolchain + the `x86_64-pc-windows-msvc` std T17 installed in
+  `~/.cache/hermes-tauri/cross`, the no-op `cl.exe`/`lib.exe` stand-in described below, and a resource
+  compiler):
+  - `cargo check --workspace --locked --target x86_64-pc-windows-msvc` — exit 0.
+  - `cargo clippy --workspace --locked --target x86_64-pc-windows-msvc -- -D warnings` — exit 0, and the
+    same with `--all-targets`, so the test targets type-check here too.
+  - The workflow's own step was extracted from the YAML and run verbatim (exit 0), so the narrower CI
+    command still matches this machine's behaviour.
+- **Resource compiler**: checking `src-tauri` (not just the crates) runs `tauri-build` → `tauri-winres`,
+  which embeds the icon and manifest and needs a Windows resource compiler. Without one the build script
+  panics with `NotAttempted("llvm-rc")`; `llvm-rc` (Ubuntu `llvm` package, LLVM 21) is enough. The CI
+  `check` job does not need one because it checks only `hermes-sidecar` and `hermes-shell-config`, whose
+  trees contain no `tauri-build`; the `windows-latest` `build` job has the real `rc.exe`.
+- **Both C dependencies build under the stand-in**: `ring 0.17.14` (through `ureq`'s TLS) and
+  `zstd-sys 2.1.1` (through `hermes-shell-config`) compile for the target in these runs. `cargo check`
+  emits metadata and never links, so no C artifact is consumed.
 
 #### Written but not run (CI Matrix)
 - **CI Runner**: `windows-latest` ([build.yml:108](../.github/workflows/build.yml#L108))
@@ -151,6 +203,9 @@ The R7 audit found that no `cfg(windows)` code had ever been compiled. These are
 4. Validate that the compile-gated Windows Job Object implementation in [crates/hermes-sidecar/src/process/windows.rs](../crates/hermes-sidecar/src/process/windows.rs) reliably terminates child and grandchild processes upon application exit (see "Still open" above).
 5. Verify deep link registry entries written by the NSIS and MSI installers and confirm single-instance forwarding.
 6. Prove the `.cmd` backend path end to end: `cmd.exe` is started with the command line `src/batch.rs` builds, and `hermes.cmd` resolves through `PATH`.
+7. Optional coverage: widen the Linux `check` job from the two crates to the whole workspace for
+   `x86_64-pc-windows-msvc`, so Windows-only code in `src-tauri` fails CI too. That step needs a resource
+   compiler (`llvm-rc`) because of `tauri-build`; the two-crate step avoids `tauri-build` entirely (T23).
 
 ---
 

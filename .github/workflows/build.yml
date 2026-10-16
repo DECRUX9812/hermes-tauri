@@ -57,11 +57,11 @@ jobs:
       - name: Check the Windows code paths (cargo check and clippy)
         run: |
           # `cargo check` emits metadata and never links, so the C and assembly
-          # parts of the one C dependency (ring, through ureq's TLS) are not
-          # needed: this runner has no MSVC toolchain, and no C artifact reaches
-          # a link step. The stand-in has to create the file cc-rs asks for,
-          # because cc-rs hard-links the archive its archiver was meant to
-          # produce.
+          # parts of the two C dependencies (ring, through ureq's TLS, and
+          # zstd-sys, through hermes-shell-config) are not needed: this runner
+          # has no MSVC toolchain, and no C artifact reaches a link step. The
+          # stand-in has to create the file cc-rs asks for, because cc-rs
+          # hard-links the archive its archiver was meant to produce.
           cat > "$RUNNER_TEMP/noop-msvc-tool.sh" <<'SH'
           #!/bin/sh
           # Stand-in for cl.exe and lib.exe: create the requested output, succeed.
