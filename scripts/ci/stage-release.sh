@@ -148,6 +148,12 @@ for i in "${!ALL_FILES[@]}"; do
         staged_name="${new_bundle}.sig"
       fi
     else
+      # Unsigned macOS app bundles share one name across archs; make them arch-specific
+      darwin_arch="${platform#darwin-}"
+      case "$basename_file" in
+        *.app.tar.gz) staged_name="Hermes-Tauri_${VERSION}_${darwin_arch}.app.tar.gz" ;;
+        *.app.tar.gz.sig) staged_name="Hermes-Tauri_${VERSION}_${darwin_arch}.app.tar.gz.sig" ;;
+      esac
       # For non-updater macOS files (e.g., .dmg), use space-replaced name
       if [ -z "${PLATFORM_STAGED_BUNDLE[$platform]:-}" ] && [ "$basename_file" = "${PLATFORM_BUNDLE[$platform]:-}" ]; then
         PLATFORM_STAGED_BUNDLE[$platform]="$staged_name"
